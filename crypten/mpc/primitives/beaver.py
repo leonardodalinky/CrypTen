@@ -5,11 +5,17 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import TYPE_CHECKING
+
+import torch
+
 import crypten
 import crypten.communicator as comm
-import torch
 from crypten.common.util import count_wraps
 from crypten.config import cfg
+
+if TYPE_CHECKING:
+    from crypten.mpc.provider.ttp_provider import GenAddTripleTTPAction, SquareTTPAction
 
 
 class IgnoreEncodings:
@@ -28,7 +34,7 @@ class IgnoreEncodings:
             tensor.encoder._scale = self.encodings_cache[i]
 
 
-def __beaver_protocol(op, x, y, *args, **kwargs):
+def __beaver_protocol(op, x, y, ttp_action: GenAddTripleTTPAction | None = None, *args, **kwargs):
     """Performs Beaver protocol for additively secret-shared tensors x and y
 
     1. Obtain uniformly random sharings [a],[b] and [c] = [a * b]
@@ -48,9 +54,13 @@ def __beaver_protocol(op, x, y, *args, **kwargs):
         raise ValueError(f"x lives on device {x.device} but y on device {y.device}")
 
     provider = crypten.mpc.get_default_provider()
-    a, b, c = provider.generate_additive_triple(
-        x.size(), y.size(), op, device=x.device, *args, **kwargs
-    )
+    if ttp_action is not None and crypten.mpc.ttp_required() and cfg.mpc.low_latency:
+        ttp_action.wait()
+        a, b, c = ttp_action.get_result()
+    else:
+        a, b, c = provider.generate_additive_triple(
+            x.size(), y.size(), op, device=x.device, *args, **kwargs
+        )
 
     from .arithmetic import ArithmeticSharedTensor
 
@@ -86,31 +96,31 @@ def __beaver_protocol(op, x, y, *args, **kwargs):
     return c
 
 
-def mul(x, y):
+def mul(x, y, ttp_action: GenAddTripleTTPAction | None = None):
     return __beaver_protocol("mul", x, y)
 
 
-def matmul(x, y):
+def matmul(x, y, ttp_action: GenAddTripleTTPAction | None = None):
     return __beaver_protocol("matmul", x, y)
 
 
-def conv1d(x, y, **kwargs):
+def conv1d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
     return __beaver_protocol("conv1d", x, y, **kwargs)
 
 
-def conv2d(x, y, **kwargs):
+def conv2d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
     return __beaver_protocol("conv2d", x, y, **kwargs)
 
 
-def conv_transpose1d(x, y, **kwargs):
+def conv_transpose1d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
     return __beaver_protocol("conv_transpose1d", x, y, **kwargs)
 
 
-def conv_transpose2d(x, y, **kwargs):
+def conv_transpose2d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
     return __beaver_protocol("conv_transpose2d", x, y, **kwargs)
 
 
-def square(x):
+def square(x, ttp_action: SquareTTPAction | None = None):
     """Computes the square of `x` for additively secret-shared tensor `x`
 
     1. Obtain uniformly random sharings [r] and [r2] = [r * r]
@@ -119,7 +129,11 @@ def square(x):
     4. Return z = [r2] + 2 * epsilon * [r] + epsilon ** 2
     """
     provider = crypten.mpc.get_default_provider()
-    r, r2 = provider.square(x.size(), device=x.device)
+    if ttp_action is not None and crypten.mpc.ttp_required() and cfg.mpc.low_latency:
+        ttp_action.wait()
+        r, r2 = ttp_action.get_result()
+    else:
+        r, r2 = provider.square(x.size(), device=x.device)
 
     with IgnoreEncodings([x, r]):
         epsilon = (x - r).reveal()

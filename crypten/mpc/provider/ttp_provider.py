@@ -201,15 +201,16 @@ class TTPClient:
 
             comm.get().send_obj(message, ttp_rank, self.ttp_group)
 
-            sizes: list[int] = comm.get().recv_obj(ttp_rank, self.ttp_group)
+            sizes: list[torch.Size] = comm.get().recv_obj(ttp_rank, self.ttp_group)
             assert len(sizes) == len(request_args_list)
-            result_buf = torch.empty(sum(sizes), dtype=torch.long, device="cpu")
+            total_sizes: int = sum(size.numel() for size in sizes)
+            result_buf = torch.empty(total_sizes, dtype=torch.long, device="cpu")
             comm.get().broadcast(result_buf, ttp_rank, self.comm_group)
 
             #
             results = []
             for size, request_args in zip(sizes, request_args_list):
-                result = result_buf[:size]
+                result = result_buf[: size.numel()].view(size)
                 result = result.to(device=request_args["device"])
                 result_buf = result_buf[size:]
                 results.append(result)
@@ -263,7 +264,7 @@ class TTPServer:
                 elif message["function"] == "batched":
                     # batchify
                     results: list[torch.LongTensor] = []
-                    sizes: list[int] = []
+                    sizes: list[torch.Size] = []
                     request_args_list: list[dict[str, Any]] = message["args"]
                     for request_args in request_args_list:
                         function = request_args["function"]
@@ -273,8 +274,8 @@ class TTPServer:
                         self.device = device
 
                         result: torch.LongTensor = getattr(self, function)(*args, **kwargs)
-                        sizes.append(int(result.size()))
-                        results.append(result.to(device="cpu"))
+                        sizes.append(result.size())
+                        results.append(result.to(device="cpu").flatten())
                     comm.get().send_obj(sizes, 0, self.ttp_group)
                     comm.get().broadcast(torch.cat(results, dim=0), ttp_rank, self.comm_group)
                 else:
@@ -514,7 +515,9 @@ class GenAddTripleTTPAction(TTPAction):
         """Checks if the request is completed"""
         return self._result is not None
 
-    def get_result(self) -> Any:
+    def get_result(
+        self,
+    ) -> tuple[ArithmeticSharedTensor, ArithmeticSharedTensor, ArithmeticSharedTensor]:
         """Returns the result of the request"""
         return self._result
 
@@ -568,7 +571,7 @@ class SquareTTPAction(TTPAction):
         """Checks if the request is completed"""
         return self._result is not None
 
-    def get_result(self) -> Any:
+    def get_result(self) -> tuple[ArithmeticSharedTensor, ArithmeticSharedTensor]:
         """Returns the result of the request"""
         return self._result
 
