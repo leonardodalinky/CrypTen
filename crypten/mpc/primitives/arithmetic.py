@@ -5,10 +5,12 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import crypten.communicator as comm
+from functools import reduce
 
 # dependencies:
 import torch
+
+import crypten.communicator as comm
 from crypten.common.functions import regular
 from crypten.common.rng import generate_random_ring_element
 from crypten.common.tensor_types import is_float_tensor, is_int_tensor, is_tensor
@@ -19,7 +21,6 @@ from crypten.cuda import CUDALongTensor
 from crypten.encoder import FixedPointEncoder
 
 from . import beaver, replicated  # noqa: F401
-
 
 SENTINEL = -1
 
@@ -73,9 +74,7 @@ class ArithmeticSharedTensor:
         if self.rank == src:
             assert tensor is not None, "source must provide a data tensor"
             if hasattr(tensor, "src"):
-                assert (
-                    tensor.src == src
-                ), "source of data tensor must match source of encryption"
+                assert tensor.src == src, "source of data tensor must match source of encryption"
         if not broadcast_size:
             assert (
                 tensor is not None or size is not None
@@ -99,7 +98,9 @@ class ArithmeticSharedTensor:
             size = comm.get().broadcast_obj(size, src)
 
         # generate pseudo-random zero sharing (PRZS) and add source's tensor:
-        self.share = ArithmeticSharedTensor.PRZS(size, device=device).share
+        self.share: torch.Tensor | CUDALongTensor = ArithmeticSharedTensor.PRZS(
+            size, device=device
+        ).share
         if self.rank == src:
             self.share += tensor
 
@@ -232,33 +233,21 @@ class ArithmeticSharedTensor:
         """
         Pads the input tensor with values provided in `value`.
         """
-        assert mode == "constant", (
-            "Padding with mode %s is currently unsupported" % mode
-        )
+        assert mode == "constant", "Padding with mode %s is currently unsupported" % mode
 
         result = self.shallow_copy()
         if isinstance(value, (int, float)):
             value = self.encoder.encode(value).item()
             if result.rank == 0:
-                result.share = torch.nn.functional.pad(
-                    result.share, pad, mode=mode, value=value
-                )
+                result.share = torch.nn.functional.pad(result.share, pad, mode=mode, value=value)
             else:
-                result.share = torch.nn.functional.pad(
-                    result.share, pad, mode=mode, value=0
-                )
+                result.share = torch.nn.functional.pad(result.share, pad, mode=mode, value=0)
         elif isinstance(value, ArithmeticSharedTensor):
-            assert (
-                value.dim() == 0
-            ), "Private values used for padding must be 0-dimensional"
+            assert value.dim() == 0, "Private values used for padding must be 0-dimensional"
             value = value.share.item()
-            result.share = torch.nn.functional.pad(
-                result.share, pad, mode=mode, value=value
-            )
+            result.share = torch.nn.functional.pad(result.share, pad, mode=mode, value=value)
         else:
-            raise TypeError(
-                "Cannot pad ArithmeticSharedTensor with a %s value" % type(value)
-            )
+            raise TypeError("Cannot pad ArithmeticSharedTensor with a %s value" % type(value))
 
         return result
 
@@ -273,9 +262,7 @@ class ArithmeticSharedTensor:
             ), "Can't stack %s with ArithmeticSharedTensor" % type(tensor)
 
         result = tensors[0].shallow_copy()
-        result.share = torch_stack(
-            [tensor.share for tensor in tensors], *args, **kwargs
-        )
+        result.share = torch_stack([tensor.share for tensor in tensors], *args, **kwargs)
         return result
 
     @staticmethod
@@ -293,7 +280,7 @@ class ArithmeticSharedTensor:
         else:
             return comm.get().reduce(shares, dst, batched=True)
 
-    def reveal(self, dst=None):
+    def reveal(self, dst=None) -> torch.Tensor | CUDALongTensor:
         """Decrypts the tensor without any downscaling."""
         tensor = self.share.clone()
         if dst is None:
@@ -380,9 +367,7 @@ class ArithmeticSharedTensor:
                 result.share = getattr(result.share, op)(y.share)
             else:  # ['mul', 'matmul', 'convNd', 'conv_transposeNd']
                 protocol = globals()[cfg.mpc.protocol]
-                result.share.set_(
-                    getattr(protocol, op)(result, y, *args, **kwargs).share.data
-                )
+                result.share.set_(getattr(protocol, op)(result, y, *args, **kwargs).share.data)
         else:
             raise TypeError("Cannot %s %s with %s" % (op, type(y), type(self)))
 
@@ -395,13 +380,54 @@ class ArithmeticSharedTensor:
                     result.encoder = self.encoder
             else:  # scale by larger of self.encoder.scale and y.encoder.scale
                 if self.encoder.scale > 1 and y.encoder.scale > 1:
-                    return result.div_(result.encoder.scale)
+                    # NOTE: maybe here is a bug
+                    # return result.div_(result.encoder.scale)
+                    if self.encoder.scale > y.encoder.scale:
+                        result.encoder = y.encoder
+                        return result.div_(self.encoder.scale)
+                    else:
+                        result.encoder = self.encoder
+                        return result.div_(y.encoder.scale)
                 elif self.encoder.scale > 1:
                     result.encoder = self.encoder
                 else:
                     result.encoder = y.encoder
 
         return result
+
+    def multi_mul(self, *others: "ArithmeticSharedTensor", inplace=False, **kwargs):
+        """Perform multi-variable multiplication"""
+        assert all(
+            isinstance(other, ArithmeticSharedTensor) for other in others
+        ), "Unsupported type for multi_mul"
+
+        if inplace:
+            result = self
+        else:
+            result = self.clone()
+
+        # TODO
+        # protocol = globals()[cfg.mpc.protocol]
+        # result.share.set_(getattr(protocol, op)(result, y, *args, **kwargs).share.data)
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        protocol = globals()[cfg.mpc.protocol]
+        # TODO: add low latency pre-fetch
+        ttp_action = TTP.DummyTTPAction()
+        yield ttp_action
+        result.share.set_(
+            getattr(protocol, op)(result, *others, ttp_action=ttp_action, **kwargs).share.data
+        )
+
+        # scale by larger of scales
+        encoder_list = [(t.encoder.scale, t.encoder) for t in (self, *others)]
+        encoder_list.sort(key=lambda x: x[0], reverse=True)
+        re_scale: int = reduce(lambda x, y: x * y, [t[0] for t in encoder_list[:-1]], initial=1)
+        result.encoder = encoder_list[-1][1]
+        result.div_(re_scale)
+
+        yield result
 
     def add(self, y):
         """Perform element-wise addition"""
@@ -467,9 +493,7 @@ class ArithmeticSharedTensor:
 
             # Validate
             if validate:
-                if not torch.lt(
-                    torch.abs(self.get_plain_text() * y - tensor), tolerance
-                ).all():
+                if not torch.lt(torch.abs(self.get_plain_text() * y - tensor), tolerance).all():
                     raise ValueError("Final result of division is incorrect.")
 
             return self
@@ -557,13 +581,9 @@ class ArithmeticSharedTensor:
         """
         # TODO: Add check for whether ceil_mode would change size of output and allow ceil_mode when it wouldn't
         if ceil_mode:
-            raise NotImplementedError(
-                "CrypTen does not support `ceil_mode` for `avg_pool2d`"
-            )
+            raise NotImplementedError("CrypTen does not support `ceil_mode` for `avg_pool2d`")
 
-        z = self._sum_pool2d(
-            kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode
-        )
+        z = self._sum_pool2d(kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode)
         if isinstance(kernel_size, (int, float)):
             pool_size = kernel_size**2
         else:
@@ -602,6 +622,21 @@ class ArithmeticSharedTensor:
     def square(self):
         return self.clone().square_()
 
+    def ll_square_(self):
+        """Low latency square function"""
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        protocol = globals()[cfg.mpc.protocol]
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        ttp_action = TTP.SquareTTPAction(self._tensor.size(), self.device)
+        yield ttp_action
+
+        self.share = protocol.square(self, ttp_action=ttp_action).div_(self.encoder.scale).share
+        yield self
+
+    def ll_square(self):
+        return self.clone().ll_square_()
+
     def where(self, condition, y):
         """Selects elements from self or y based on condition
 
@@ -630,9 +665,9 @@ class ArithmeticSharedTensor:
         """
         if is_tensor(src):
             src = ArithmeticSharedTensor(src)
-        assert isinstance(
-            src, ArithmeticSharedTensor
-        ), "Unrecognized scatter src type: %s" % type(src)
+        assert isinstance(src, ArithmeticSharedTensor), "Unrecognized scatter src type: %s" % type(
+            src
+        )
         self.share.scatter_(dim, index, src.share)
         return self
 

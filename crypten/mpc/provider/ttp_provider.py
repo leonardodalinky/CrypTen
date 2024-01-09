@@ -5,6 +5,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import functools
+import itertools
 import logging
 from abc import ABC
 from typing import Any
@@ -371,6 +373,22 @@ class TTPServer:
         r2 = r.mul(r)
         return r2 - self._get_additive_PRSS(size, remove_rank=True)
 
+    def multi_mul(self, n: int, size: torch.Size, *args, **kwargs):
+        """Generate shares for rank 0 of the high order terms."""
+        # TODO
+        num_terms = 2**n - 1
+        order_one_terms = [self._get_additive_PRSS(size) for _ in range(n)]
+        high_order_terms = []
+        for order in range(2, n + 1):
+            order_indices = list(itertools.combinations(range(n), order))
+            for indices in order_indices:
+                plain: torch.Tensor = functools.reduce(
+                    lambda x, y: torch.mul(x, y), [order_one_terms[i] for i in indices]
+                )
+                tmp = plain - self._get_additive_PRSS(size, remove_rank=True)
+                high_order_terms.append(tmp)
+        return torch.stack(high_order_terms, dim=0)
+
     def binary(self, size0, size1):
         # xor all shares of `a` and `b` to get plaintext `a` and `b`
         a = self._get_binary_PRSS(size0)
@@ -444,11 +462,36 @@ class TTPAction(ABC):
         return TTPActionGroup(self, *actions)
 
 
+class DummyTTPAction(TTPAction):
+    def __init__(self, result=None):
+        self.result = result
+
+    def pre_request_stage(self) -> Any:
+        """Prepares for the request"""
+        return None
+
+    def ttp_request_args(self) -> dict[str, Any] | None:
+        """Args of TTP requrests"""
+        return None
+
+    def post_request_stage(self, pre_stage_output: Any, ttp_request_result: torch.LongTensor):
+        """Post processing of the request"""
+        pass
+
+    def is_completed(self) -> bool:
+        """Checks if the request is completed"""
+        return True
+
+    def get_result(self):
+        """Returns the result of the request"""
+        return self.result
+
+
 class GenAddTripleTTPAction(TTPAction):
     def __init__(
         self,
-        size0: int,
-        size1: int,
+        size0: torch.Size,
+        size1: torch.Size,
         op: str,
         device: torch.device | str | None = None,
         *args,
@@ -523,7 +566,7 @@ class GenAddTripleTTPAction(TTPAction):
 
 
 class SquareTTPAction(TTPAction):
-    def __init__(self, size: int, device: torch.device | str | None = None):
+    def __init__(self, size: torch.Size, device: torch.device | str | None = None):
         """Action for generating a square double.
 
         Args:
@@ -576,8 +619,94 @@ class SquareTTPAction(TTPAction):
         return self._result
 
 
+class MultiMulTTPAction(TTPAction):
+    def __init__(
+        self,
+        n: int,
+        size: torch.Size,
+        device: torch.device | str | None = None,
+        *args,
+        **kwargs,
+    ):
+        """Action for generating an additive triple.
+
+        Args:
+            sizes (int): size of the first operand
+            device (torch.device | str | None): device to perform the operation on
+            *args: additional arguments
+            **kwargs: additional keyword arguments
+        """
+        self.n = n
+        self.num_terms = 2**n - 1
+        self.size = size
+        self.device = device
+        self.args = args
+        self.kwargs = kwargs
+        self._result = None
+
+    def pre_request_stage(self) -> Any:
+        """Prepares for the request"""
+        generator = TTPClient.get().get_generator(device=self.device)
+
+        order_one_results: list[torch.Tensor] = []
+        high_order_results: list[torch.Tensor] = []
+
+        # first n terms are sampled locally
+        for _ in range(self.n):
+            order_one_results.append(
+                generate_random_ring_element(self.size, generator=generator, device=self.device)
+            )
+
+        # rest of the terms are sampled locally, excluding party 0
+        if comm.get().get_rank() != 0:
+            for _ in range(self.num_terms - self.n):
+                high_order_results.append(
+                    generate_random_ring_element(self.size, generator=generator, device=self.device)
+                )
+
+        return torch.stack(order_one_results, dim=0), torch.stack(high_order_results, dim=0)
+
+    def ttp_request_args(self) -> dict[str, Any] | None:
+        """Args of TTP requrests"""
+        if comm.get().get_rank() == 0:
+            return {
+                "func_name": "multi_mul",
+                "device": str(self.device) if self.device is not None else None,
+                "args": (self.n, self.size, *self.args),
+                "kwargs": self.kwargs,
+            }
+        else:
+            return None
+
+    def post_request_stage(self, pre_stage_output: Any, ttp_request_result: torch.LongTensor):
+        """Post processing of the request"""
+        order_one_results: torch.Tensor
+        high_order_results: torch.Tensor
+        order_one_results, high_order_results = pre_stage_output
+        if comm.get().get_rank() == 0:
+            # Request c from TTP
+            high_order_results = ttp_request_result
+
+        assert order_one_results.size(0) == self.n
+        assert high_order_results.size(0) == self.num_terms - self.n
+        self._result = []
+        for t in itertools.chain(order_one_results, high_order_results):
+            self._result.append(ArithmeticSharedTensor.from_shares(t, precision=0))
+
+    def is_completed(self) -> bool:
+        """Checks if the request is completed"""
+        return self._result is not None
+
+    def get_result(
+        self,
+    ) -> list[ArithmeticSharedTensor]:
+        """Returns the result of the request"""
+        return self._result
+
+
 class TTPActionGroup:
     def __init__(self, *actions: TTPAction) -> None:
+        assert all(isinstance(action, TTPAction) for action in actions)
         self.actions = list(actions)
 
     def wait(self) -> None:
@@ -604,7 +733,11 @@ class TTPActionGroup:
     def get_result(self) -> tuple[Any]:
         return tuple(action.get_result() for action in self.actions)
 
-    def add(self, *actions: TTPAction) -> "TTPActionGroup":
+    def add_(self, *actions: TTPAction) -> "TTPActionGroup":
         assert all(isinstance(action, TTPAction) for action in actions)
         self.actions.extend(actions)
+        return self
+
+    def add_group_(self, group: "TTPActionGroup") -> "TTPActionGroup":
+        self.actions.extend(group.actions)
         return self

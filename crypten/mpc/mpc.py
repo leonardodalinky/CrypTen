@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import torch
+
 from crypten import communicator as comm
 from crypten.common.tensor_types import is_tensor
 from crypten.common.util import torch_stack
@@ -185,10 +186,7 @@ class MPCTensor(CrypTensor):
         share = self.share
         plain_text = self._tensor.get_plain_text() if debug_mode else "HIDDEN"
         ptype = self.ptype
-        return (
-            f"MPCTensor(\n\t_tensor={share}\n"
-            f"\tplain_text={plain_text}\n\tptype={ptype}\n)"
-        )
+        return f"MPCTensor(\n\t_tensor={share}\n" f"\tplain_text={plain_text}\n\tptype={ptype}\n)"
 
     def __hash__(self):
         return hash(self.share)
@@ -222,9 +220,7 @@ class MPCTensor(CrypTensor):
         """
         rand = MPCTensor([])
         encoder = FixedPointEncoder()
-        rand._tensor = BinarySharedTensor.rand(
-            *sizes, bits=encoder._precision_bits, device=device
-        )
+        rand._tensor = BinarySharedTensor.rand(*sizes, bits=encoder._precision_bits, device=device)
         rand._tensor.encoder = encoder
         rand.ptype = Ptype.binary
         return rand.to(Ptype.arithmetic, bits=encoder._precision_bits)
@@ -320,6 +316,9 @@ BINARY_FUNCTIONS = [
     "conv_transpose1d",
     "conv_transpose2d",
 ]
+
+# TODO: multi-ary function
+MULTIARY_FUNCTIONS = []
 
 
 def _add_unary_passthrough_function(name):
