@@ -395,7 +395,7 @@ class ArithmeticSharedTensor:
 
         return result
 
-    def multi_mul(self, *others: "ArithmeticSharedTensor", inplace=False, **kwargs):
+    def ll_multi_mul(self, *others: "ArithmeticSharedTensor", inplace=False, **kwargs):
         """Perform multi-variable multiplication"""
         assert all(
             isinstance(other, ArithmeticSharedTensor) for other in others
@@ -428,8 +428,8 @@ class ArithmeticSharedTensor:
 
         yield result
 
-    def multi_mul_(self, *others: "ArithmeticSharedTensor", **kwargs):
-        return self.multi_mul(*others, inplace=True, **kwargs)
+    def ll_multi_mul_(self, *others: "ArithmeticSharedTensor", **kwargs):
+        return self.ll_multi_mul(*others, inplace=True, **kwargs)
 
     def add(self, y):
         """Perform element-wise addition"""
@@ -447,13 +447,24 @@ class ArithmeticSharedTensor:
         """Perform element-wise subtraction"""
         return self._arithmetic_function_(y, "sub")
 
-    def mul(self, y):
+    def mul(self, y, **kwargs):
         """Perform element-wise multiplication"""
         if isinstance(y, int):
             result = self.clone()
             result.share = self.share * y
             return result
-        return self._arithmetic_function(y, "mul")
+        return self._arithmetic_function(y, "mul", **kwargs)
+
+    def ll_mul(self, y):
+        """Low latency multiplication"""
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        ttp_action = TTP.GenAddTripleTTPAction(
+            self._tensor.size(), y.share.size(), "mul", self.device
+        )
+        yield ttp_action
+        yield self.mul(y, ttp_action=ttp_action)
 
     def mul_(self, y):
         """Perform element-wise multiplication"""
@@ -507,9 +518,20 @@ class ArithmeticSharedTensor:
         assert is_float_tensor(y), "Unsupported type for div_: %s" % type(y)
         return self.mul_(y.reciprocal())
 
-    def matmul(self, y):
+    def matmul(self, y, **kwargs):
         """Perform matrix multiplication using some tensor"""
-        return self._arithmetic_function(y, "matmul")
+        return self._arithmetic_function(y, "matmul", **kwargs)
+
+    def ll_matmul(self, y):
+        """Low latency matrix multiplication"""
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        ttp_action = TTP.GenAddTripleTTPAction(
+            self._tensor.size(), y.share.size(), "matmul", self.device
+        )
+        yield ttp_action
+        yield self.matmul(y, ttp_action=ttp_action)
 
     def conv1d(self, kernel, **kwargs):
         """Perform a 1D convolution using the given kernel"""
@@ -637,7 +659,14 @@ class ArithmeticSharedTensor:
         yield self
 
     def ll_square(self):
-        return self.clone().ll_square_()
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        protocol = globals()[cfg.mpc.protocol]
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        ttp_action = TTP.SquareTTPAction(self._tensor.size(), self.device)
+        yield ttp_action
+
+        yield protocol.square(self, ttp_action=ttp_action).div_(self.encoder.scale)
 
     def where(self, condition, y):
         """Selects elements from self or y based on condition

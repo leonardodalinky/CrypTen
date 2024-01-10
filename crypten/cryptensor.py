@@ -12,7 +12,6 @@ import torch
 from .debug import register_validation
 from .gradients import AutogradContext, BaseAutogradContext, get_grad_fn
 
-
 # list of all static functions that CrypTensors support:
 STATIC_FUNCTIONS = ["cat", "stack"]
 STATIC_FUNCTION_MAPPING = {getattr(torch, name): name for name in STATIC_FUNCTIONS}
@@ -222,7 +221,6 @@ class CrypTensor(object, metaclass=CrypTensorMetaclass):
         """
         if self.requires_grad:
             with CrypTensor.no_grad():  # disable autograd for backward pass
-
                 # in initial backward call, identify all required nodes:
                 if top_node:
                     self._identify_required_grads()
@@ -232,9 +230,7 @@ class CrypTensor(object, metaclass=CrypTensorMetaclass):
                     if self.nelement() == 1:
                         grad_input = self.new(torch.ones_like(self.data))
                     else:
-                        raise RuntimeError(
-                            "grad can be implicitly created only for scalar outputs"
-                        )
+                        raise RuntimeError("grad can be implicitly created only for scalar outputs")
 
                 # process gradient input:
                 self.grad_received += 1
@@ -297,12 +293,9 @@ class CrypTensor(object, metaclass=CrypTensorMetaclass):
             # dispatch torch.{cat,stack} call on CrypTensor to CrypTen:
             return getattr(crypten, STATIC_FUNCTION_MAPPING[func])(*args, **kwargs)
         else:
-            raise NotImplementedError(
-                f"CrypTen does not support torch function {func}."
-            )
+            raise NotImplementedError(f"CrypTen does not support torch function {func}.")
 
     def _get_forward_function_no_ctx(self, grad_fn):
-
         # determine if self is a dummy object (the case for staticmethods):
         is_dummy = getattr(self, "__IS_DUMMY__", False)
 
@@ -320,7 +313,6 @@ class CrypTensor(object, metaclass=CrypTensorMetaclass):
         return autograd_forward_no_ctx
 
     def _get_autograd_forward_function(self, name, grad_fn, in_place):
-
         # determine if self is a dummy object (the case for staticmethods):
         is_dummy = getattr(self, "__IS_DUMMY__", False)
 
@@ -406,6 +398,8 @@ class CrypTensor(object, metaclass=CrypTensorMetaclass):
         if inplace:
             if CrypTensor.AUTOGRAD_ENABLED and self.requires_grad:
                 raise RuntimeError("Autograd is not supported for in-place functions.")
+            elif name.startswith("ll_"):
+                raise RuntimeError("Cannot use low latency function for inplace operation.")
 
             # Note: native in-place support is now deprecated
             # Instead, CrypTensors now compute out-of-place and

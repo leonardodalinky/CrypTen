@@ -299,6 +299,38 @@ class MPCTensor(CrypTensor):
         result._tensor.div_(y)
         return result
 
+    def ll_mul(self, y):
+        result = self.shallow_copy()
+        if isinstance(y, MPCTensor):
+            y = y._tensor
+        g = result._tensor.ll_mul(y)
+        # action
+        yield next(g)
+        # final result
+        result._tensor = next(g)
+        yield result
+
+    def ll_matmul(self, y):
+        result = self.shallow_copy()
+        if isinstance(y, MPCTensor):
+            y = y._tensor
+        g = result._tensor.ll_matmul(y)
+        # action
+        yield next(g)
+        # final result
+        result._tensor = next(g)
+        yield result
+
+    def ll_multi_mul(self, *others):
+        result = self.shallow_copy()
+        others = [other._tensor if isinstance(other, MPCTensor) else other for other in others]
+        g = result._tensor.ll_multi_mul(*others)
+        # action
+        yield next(g)
+        # final result
+        result._tensor = next(g)
+        yield result
+
 
 UNARY_FUNCTIONS = [
     "avg_pool2d",
@@ -316,9 +348,6 @@ BINARY_FUNCTIONS = [
     "conv_transpose1d",
     "conv_transpose2d",
 ]
-
-# TODO: multi-ary function
-MULTIARY_FUNCTIONS = ["multi_mul"]
 
 
 def _add_unary_passthrough_function(name):
@@ -356,6 +385,3 @@ for func_name in UNARY_FUNCTIONS:
 
 for func_name in BINARY_FUNCTIONS:
     _add_binary_passthrough_function(func_name)
-
-for func_name in MULTIARY_FUNCTIONS:
-    _add_multiary_passthrough_function(func_name)
