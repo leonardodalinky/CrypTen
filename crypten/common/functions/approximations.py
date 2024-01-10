@@ -7,10 +7,11 @@
 
 import math
 
-import crypten
 import torch
-from crypten.config import cfg
 
+import crypten
+from crypten.config import cfg
+from crypten.mpc import low_latency_enabled
 
 __all__ = [
     "exp",
@@ -47,8 +48,11 @@ def exp(self):
     iters = cfg.functions.exp_iterations
 
     result = 1 + self.div(2**iters)
-    for _ in range(iters):
-        result = result.square()
+    if low_latency_enabled():
+        pass
+    else:
+        for _ in range(iters):
+            result = result.square()
     return result
 
 
@@ -351,9 +355,7 @@ def tanh(self):
         terms = cfg.functions.sigmoid_tanh_terms
         coeffs = crypten.common.util.chebyshev_series(torch.tanh, 1, terms)[1::2]
         tanh_polys = _chebyshev_polynomials(self, terms)
-        tanh_polys_flipped = (
-            tanh_polys.unsqueeze(dim=-1).transpose(0, -1).squeeze(dim=0)
-        )
+        tanh_polys_flipped = tanh_polys.unsqueeze(dim=-1).transpose(0, -1).squeeze(dim=0)
         out = tanh_polys_flipped.matmul(coeffs)
 
         # truncate outside [-maxval, maxval]

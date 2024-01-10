@@ -322,7 +322,9 @@ class ArithmeticSharedTensor:
     def _arithmetic_function_(self, y, op, *args, **kwargs):
         return self._arithmetic_function(y, op, inplace=True, *args, **kwargs)
 
-    def _arithmetic_function(self, y, op, inplace=False, *args, **kwargs):  # noqa:C901
+    def _arithmetic_function(
+        self, y, op, inplace=False, *args, wraps_ttp_action=None, **kwargs
+    ):  # noqa:C901
         assert op in [
             "add",
             "sub",
@@ -375,7 +377,7 @@ class ArithmeticSharedTensor:
         if not additive_func:
             if public:  # scale by self.encoder.scale
                 if self.encoder.scale > 1:
-                    return result.div_(result.encoder.scale)
+                    return result.div_(result.encoder.scale, wraps_ttp_action=wraps_ttp_action)
                 else:
                     result.encoder = self.encoder
             else:  # scale by larger of self.encoder.scale and y.encoder.scale
@@ -384,16 +386,41 @@ class ArithmeticSharedTensor:
                     # return result.div_(result.encoder.scale)
                     if self.encoder.scale > y.encoder.scale:
                         result.encoder = y.encoder
-                        return result.div_(self.encoder.scale)
+                        return result.div_(self.encoder.scale, wraps_ttp_action=wraps_ttp_action)
                     else:
                         result.encoder = self.encoder
-                        return result.div_(y.encoder.scale)
+                        return result.div_(y.encoder.scale, wraps_ttp_action=wraps_ttp_action)
                 elif self.encoder.scale > 1:
                     result.encoder = self.encoder
                 else:
                     result.encoder = y.encoder
 
         return result
+
+    def _arithmetic_function_need_scale(self, y, op, *args, **kwargs) -> bool:
+        assert op in [
+            "add",
+            "sub",
+            "mul",
+            "matmul",
+            "conv1d",
+            "conv2d",
+            "conv_transpose1d",
+            "conv_transpose2d",
+        ], f"Provided op `{op}` is not a supported arithmetic function"
+
+        additive_func = op in ["add", "sub"]
+        public = isinstance(y, (int, float)) or is_tensor(y)
+
+        # Scale by encoder scale if necessary
+        if not additive_func:
+            if public:  # scale by self.encoder.scale
+                if self.encoder.scale > 1:
+                    return True
+            else:  # scale by larger of self.encoder.scale and y.encoder.scale
+                if self.encoder.scale > 1 and y.encoder.scale > 1:
+                    return True
+        return False
 
     def ll_multi_mul(self, *others: "ArithmeticSharedTensor", inplace=False, **kwargs):
         """Perform multi-variable multiplication"""
@@ -410,26 +437,30 @@ class ArithmeticSharedTensor:
         assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
         import crypten.mpc.provider.ttp_provider as TTP
 
+        # pre-compute scale by larger of scales
+        encoder_list = [(t.encoder.scale, t.encoder) for t in (self, *others)]
+        encoder_list.sort(key=lambda x: x[0], reverse=True)
+        re_scale: int = reduce(lambda x, y: x * y, [t[0] for t in encoder_list[:-1]], initial=1)
+
         protocol = globals()[cfg.mpc.protocol]
         # add low latency pre-fetch
         n = len(others) + 1
         ttp_action = TTP.MultiMulTTPAction(n, self._tensor.size(), self.device)
-        yield ttp_action
+        wraps_ttp_action = TTP.WrapsTTPAction(self._tensor.size(), self.device)
+        if re_scale > 1:
+            yield TTP.TTPActionGroup(ttp_action, wraps_ttp_action)
+        else:
+            yield ttp_action
         result.share.set_(
             getattr(protocol, "multi_mul")(result, *others, ttp_action=ttp_action).share.data
         )
 
-        # scale by larger of scales
-        encoder_list = [(t.encoder.scale, t.encoder) for t in (self, *others)]
-        encoder_list.sort(key=lambda x: x[0], reverse=True)
-        re_scale: int = reduce(lambda x, y: x * y, [t[0] for t in encoder_list[:-1]], initial=1)
+        # apply scale if needed
         result.encoder = encoder_list[-1][1]
-        result.div_(re_scale)
+        if re_scale > 1:
+            result.div_(re_scale, wraps_ttp_action=wraps_ttp_action)
 
         yield result
-
-    def ll_multi_mul_(self, *others: "ArithmeticSharedTensor", **kwargs):
-        return self.ll_multi_mul(*others, inplace=True, **kwargs)
 
     def add(self, y):
         """Perform element-wise addition"""
@@ -463,8 +494,13 @@ class ArithmeticSharedTensor:
         ttp_action = TTP.GenAddTripleTTPAction(
             self._tensor.size(), y.share.size(), "mul", self.device
         )
-        yield ttp_action
-        yield self.mul(y, ttp_action=ttp_action)
+        if self._arithmetic_function_need_scale(y, "mul"):
+            wraps_ttp_action = TTP.WrapsTTPAction(ttp_action.get_result_size(), self.device)
+            yield TTP.TTPActionGroup(ttp_action, wraps_ttp_action)
+            yield self.mul(y, ttp_action=ttp_action, wraps_ttp_action=wraps_ttp_action)
+        else:
+            yield ttp_action
+            yield self.mul(y, ttp_action=ttp_action)
 
     def mul_(self, y):
         """Perform element-wise multiplication"""
@@ -473,16 +509,17 @@ class ArithmeticSharedTensor:
             return self
         return self._arithmetic_function_(y, "mul")
 
-    def div(self, y):
+    def div(self, y, wraps_ttp_action=None):
         """Divide by a given tensor"""
         result = self.clone()
+        # FIXME: wraps_ttp_action is unaware of the broadcast, use it carefully
         if isinstance(y, CrypTensor):
             result.share = torch.broadcast_tensors(result.share, y.share)[0].clone()
         elif is_tensor(y):
             result.share = torch.broadcast_tensors(result.share, y)[0].clone()
-        return result.div_(y)
+        return result.div_(y, wraps_ttp_action=wraps_ttp_action)
 
-    def div_(self, y):
+    def div_(self, y, wraps_ttp_action=None):
         """Divide two tensors element-wise"""
         # TODO: Add test coverage for this code path (next 4 lines)
         if isinstance(y, float) and int(y) == y:
@@ -500,7 +537,7 @@ class ArithmeticSharedTensor:
             # Truncate protocol for dividing by public integers:
             if comm.get().get_world_size() > 2:
                 protocol = globals()[cfg.mpc.protocol]
-                protocol.truncate(self, y)
+                protocol.truncate(self, y, wraps_ttp_action=wraps_ttp_action)
             else:
                 self.share = self.share.div_(y, rounding_mode="trunc")
 
@@ -530,8 +567,13 @@ class ArithmeticSharedTensor:
         ttp_action = TTP.GenAddTripleTTPAction(
             self._tensor.size(), y.share.size(), "matmul", self.device
         )
-        yield ttp_action
-        yield self.matmul(y, ttp_action=ttp_action)
+        if self._arithmetic_function_need_scale(y, "matmul"):
+            wraps_ttp_action = TTP.WrapsTTPAction(ttp_action.get_result_size(), self.device)
+            yield TTP.TTPActionGroup(ttp_action, wraps_ttp_action)
+            yield self.matmul(y, ttp_action=ttp_action, wraps_ttp_action=wraps_ttp_action)
+        else:
+            yield ttp_action
+            yield self.matmul(y, ttp_action=ttp_action)
 
     def conv1d(self, kernel, **kwargs):
         """Perform a 1D convolution using the given kernel"""
@@ -646,27 +688,22 @@ class ArithmeticSharedTensor:
     def square(self):
         return self.clone().square_()
 
-    def ll_square_(self):
-        """Low latency square function"""
-        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
-        protocol = globals()[cfg.mpc.protocol]
-        import crypten.mpc.provider.ttp_provider as TTP
-
-        ttp_action = TTP.SquareTTPAction(self._tensor.size(), self.device)
-        yield ttp_action
-
-        self.share = protocol.square(self, ttp_action=ttp_action).div_(self.encoder.scale).share
-        yield self
-
     def ll_square(self):
         assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
         protocol = globals()[cfg.mpc.protocol]
         import crypten.mpc.provider.ttp_provider as TTP
 
         ttp_action = TTP.SquareTTPAction(self._tensor.size(), self.device)
-        yield ttp_action
 
-        yield protocol.square(self, ttp_action=ttp_action).div_(self.encoder.scale)
+        if self.encoder.scale > 1:
+            wraps_ttp_action = TTP.WrapsTTPAction(self._tensor.size(), self.device)
+            yield TTP.TTPActionGroup(ttp_action, wraps_ttp_action)
+            yield protocol.square(self, ttp_action=ttp_action).div_(
+                self.encoder.scale, wraps_ttp_action=wraps_ttp_action
+            )
+        else:
+            yield ttp_action
+            yield protocol.square(self, ttp_action=ttp_action)
 
     def where(self, condition, y):
         """Selects elements from self or y based on condition

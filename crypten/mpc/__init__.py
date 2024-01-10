@@ -12,7 +12,6 @@ from .context import run_multiprocess
 from .mpc import MPCTensor
 from .ptype import ptype
 
-
 __all__ = [
     "MPCTensor",
     "primitives",
@@ -39,3 +38,7 @@ def get_default_provider():
 
 def ttp_required():
     return cfg.mpc.provider == "TTP"
+
+
+def low_latency_enabled():
+    return ttp_required() and cfg.mpc.protocol == "beaver" and cfg.mpc.low_latency

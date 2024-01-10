@@ -506,6 +506,7 @@ class GenAddTripleTTPAction(TTPAction):
         self.args = args
         self.kwargs = kwargs
         self._result = None
+        self._result_size = None
 
     def pre_request_stage(self) -> Any:
         """Prepares for the request"""
@@ -537,7 +538,7 @@ class GenAddTripleTTPAction(TTPAction):
         else:
             # TODO: Compute size without executing computation
             generator = TTPClient.get().get_generator(device=self.device)
-            c_size = getattr(torch, self.op)(a, b, *self.args, **self.kwargs).size()
+            c_size = self.get_result_size()
             c = generate_random_ring_element(c_size, generator=generator, device=self.device)
 
         a = ArithmeticSharedTensor.from_shares(a, precision=0)
@@ -555,6 +556,15 @@ class GenAddTripleTTPAction(TTPAction):
     ) -> tuple[ArithmeticSharedTensor, ArithmeticSharedTensor, ArithmeticSharedTensor]:
         """Returns the result of the request"""
         return self._result
+
+    def get_result_size(self) -> torch.Size:
+        if self._result_size is None:
+            dummy_a = torch.empty(self.size0, dtype=torch.long, device=self.device)
+            dummy_b = torch.empty(self.size1, dtype=torch.long, device=self.device)
+            self._result_size = getattr(torch, self.op)(
+                dummy_a, dummy_b, *self.args, **self.kwargs
+            ).size()
+        return self._result_size
 
 
 class SquareTTPAction(TTPAction):
@@ -601,6 +611,62 @@ class SquareTTPAction(TTPAction):
         r = ArithmeticSharedTensor.from_shares(r, precision=0)
         r2 = ArithmeticSharedTensor.from_shares(r2, precision=0)
         self._result = (r, r2)
+
+    def is_completed(self) -> bool:
+        """Checks if the request is completed"""
+        return self._result is not None
+
+    def get_result(self) -> tuple[ArithmeticSharedTensor, ArithmeticSharedTensor]:
+        """Returns the result of the request"""
+        return self._result
+
+
+class WrapsTTPAction(TTPAction):
+    def __init__(self, size: torch.Size, device: torch.device | str | None = None):
+        """Action for generating a wraps double.
+
+        Args:
+            size (int): size of the operand
+            device (torch.device | str | None): device to perform the operation on
+        """
+        self.size = size
+        self.device = device
+        self._result = None
+
+    def pre_request_stage(self) -> Any:
+        """Prepares for the request"""
+        generator = TTPClient.get().get_generator(device=self.device)
+
+        r = generate_random_ring_element(self.size, generator=generator, device=self.device)
+        return r
+
+    def ttp_request_args(self) -> dict[str, Any] | None:
+        """Args of TTP requrests"""
+        if comm.get().get_rank() == 0:
+            return {
+                "func_name": "wraps",
+                "device": str(self.device) if self.device is not None else None,
+                "args": (self.size,),
+                "kwargs": {},
+            }
+        else:
+            return None
+
+    def post_request_stage(self, pre_stage_output: Any, ttp_request_result: torch.LongTensor):
+        """Post processing of the request"""
+        r = pre_stage_output
+        if comm.get().get_rank() == 0:
+            # Request theta_r from TTP
+            theta_r = ttp_request_result
+        else:
+            generator = TTPClient.get().get_generator(device=self.device)
+            theta_r = generate_random_ring_element(
+                self.size, generator=generator, device=self.device
+            )
+
+        r = ArithmeticSharedTensor.from_shares(r, precision=0)
+        theta_r = ArithmeticSharedTensor.from_shares(theta_r, precision=0)
+        self._result = (r, theta_r)
 
     def is_completed(self) -> bool:
         """Checks if the request is completed"""
@@ -697,9 +763,17 @@ class MultiMulTTPAction(TTPAction):
 
 
 class TTPActionGroup:
-    def __init__(self, *actions: TTPAction) -> None:
-        assert all(isinstance(action, TTPAction) for action in actions)
-        self.actions = list(actions)
+    def __init__(self, *actions_or_groups: TTPAction | "TTPActionGroup") -> None:
+        self.actions = []
+        for action_or_group in actions_or_groups:
+            if isinstance(action_or_group, TTPAction):
+                self.actions.append(action_or_group)
+            elif isinstance(action_or_group, TTPActionGroup):
+                self.actions.extend(action_or_group.actions)
+            else:
+                raise ValueError(
+                    f"Expected TTPAction or TTPActionGroup, got {type(action_or_group)}"
+                )
 
     def wait(self) -> None:
         """Waits for all actions to complete"""
@@ -725,11 +799,15 @@ class TTPActionGroup:
     def get_result(self) -> tuple[Any]:
         return tuple(action.get_result() for action in self.actions)
 
-    def add_(self, *actions: TTPAction) -> "TTPActionGroup":
-        assert all(isinstance(action, TTPAction) for action in actions)
-        self.actions.extend(actions)
-        return self
-
-    def add_group_(self, group: "TTPActionGroup") -> "TTPActionGroup":
-        self.actions.extend(group.actions)
+    def add_(self, *actions_or_groups: TTPAction | "TTPActionGroup") -> "TTPActionGroup":
+        """Adds actions to the group"""
+        for action_or_group in actions_or_groups:
+            if isinstance(action_or_group, TTPAction):
+                self.actions.append(action_or_group)
+            elif isinstance(action_or_group, TTPActionGroup):
+                self.actions.extend(action_or_group.actions)
+            else:
+                raise ValueError(
+                    f"Expected TTPAction or TTPActionGroup, got {type(action_or_group)}"
+                )
         return self

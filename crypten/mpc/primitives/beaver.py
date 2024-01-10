@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         GenAddTripleTTPAction,
         MultiMulTTPAction,
         SquareTTPAction,
+        WrapsTTPAction,
     )
 
     from .arithmetic import ArithmeticSharedTensor
@@ -63,7 +64,7 @@ def __beaver_protocol(op, x, y, ttp_action: GenAddTripleTTPAction | None = None,
         raise ValueError(f"x lives on device {x.device} but y on device {y.device}")
 
     provider = crypten.mpc.get_default_provider()
-    if ttp_action is not None and crypten.mpc.ttp_required() and cfg.mpc.low_latency:
+    if ttp_action is not None and crypten.mpc.low_latency_enabled():
         ttp_action.wait()
         a, b, c = ttp_action.get_result()
     else:
@@ -174,7 +175,7 @@ def square(x, ttp_action: SquareTTPAction | None = None):
     4. Return z = [r2] + 2 * epsilon * [r] + epsilon ** 2
     """
     provider = crypten.mpc.get_default_provider()
-    if ttp_action is not None and crypten.mpc.ttp_required() and cfg.mpc.low_latency:
+    if ttp_action is not None and crypten.mpc.low_latency_enabled():
         ttp_action.wait()
         r, r2 = ttp_action.get_result()
     else:
@@ -185,7 +186,7 @@ def square(x, ttp_action: SquareTTPAction | None = None):
     return r2 + 2 * r * epsilon + epsilon * epsilon
 
 
-def wraps(x):
+def wraps(x, ttp_action: WrapsTTPAction | None = None):
     """Privately computes the number of wraparounds for a set a shares
 
     To do so, we note that:
@@ -198,8 +199,12 @@ def wraps(x):
     Note: Since [eta_xr] = 0 with probability 1 - |x| / Q for modulus Q, we
     can make the assumption that [eta_xr] = 0 with high probability.
     """
-    provider = crypten.mpc.get_default_provider()
-    r, theta_r = provider.wrap_rng(x.size(), device=x.device)
+    if ttp_action is not None and crypten.mpc.low_latency_enabled():
+        ttp_action.wait()
+        r, theta_r = ttp_action.get_result()
+    else:
+        provider = crypten.mpc.get_default_provider()
+        r, theta_r = provider.wrap_rng(x.size(), device=x.device)
     beta_xr = theta_r.clone()
     beta_xr._tensor = count_wraps([x._tensor, r._tensor])
 
@@ -215,9 +220,9 @@ def wraps(x):
     return theta_x
 
 
-def truncate(x, y):
+def truncate(x, y, wraps_ttp_action: WrapsTTPAction | None = None):
     """Protocol to divide an ArithmeticSharedTensor `x` by a constant integer `y`"""
-    wrap_count = wraps(x)
+    wrap_count = wraps(x, ttp_action=wraps_ttp_action)
     x.share = x.share.div_(y, rounding_mode="trunc")
     # NOTE: The multiplication here must be split into two parts
     # to avoid long out-of-bounds when y <= 2 since (2 ** 63) is
