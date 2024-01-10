@@ -318,7 +318,7 @@ BINARY_FUNCTIONS = [
 ]
 
 # TODO: multi-ary function
-MULTIARY_FUNCTIONS = []
+MULTIARY_FUNCTIONS = ["multi_mul"]
 
 
 def _add_unary_passthrough_function(name):
@@ -341,8 +341,21 @@ def _add_binary_passthrough_function(name):
     setattr(MPCTensor, name, binary_wrapper_function)
 
 
+def _add_multiary_passthrough_function(name):
+    def multiary_wrapper_function(self, *values, **kwargs):
+        result = self.shallow_copy()
+        values = [value._tensor if isinstance(value, MPCTensor) else value for value in values]
+        result._tensor = getattr(result._tensor, name)(*values, **kwargs)
+        return result
+
+    setattr(MPCTensor, name, multiary_wrapper_function)
+
+
 for func_name in UNARY_FUNCTIONS:
     _add_unary_passthrough_function(func_name)
 
 for func_name in BINARY_FUNCTIONS:
     _add_binary_passthrough_function(func_name)
+
+for func_name in MULTIARY_FUNCTIONS:
+    _add_multiary_passthrough_function(func_name)

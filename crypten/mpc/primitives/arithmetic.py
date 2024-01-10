@@ -400,24 +400,23 @@ class ArithmeticSharedTensor:
         assert all(
             isinstance(other, ArithmeticSharedTensor) for other in others
         ), "Unsupported type for multi_mul"
+        assert all(self._tensor.size() == other._tensor.size() for other in others), "Size mismatch"
 
         if inplace:
             result = self
         else:
             result = self.clone()
 
-        # TODO
-        # protocol = globals()[cfg.mpc.protocol]
-        # result.share.set_(getattr(protocol, op)(result, y, *args, **kwargs).share.data)
         assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
         import crypten.mpc.provider.ttp_provider as TTP
 
         protocol = globals()[cfg.mpc.protocol]
-        # TODO: add low latency pre-fetch
-        ttp_action = TTP.DummyTTPAction()
+        # add low latency pre-fetch
+        n = len(others) + 1
+        ttp_action = TTP.MultiMulTTPAction(n, self._tensor.size(), self.device)
         yield ttp_action
         result.share.set_(
-            getattr(protocol, op)(result, *others, ttp_action=ttp_action, **kwargs).share.data
+            getattr(protocol, "multi_mul")(result, *others, ttp_action=ttp_action).share.data
         )
 
         # scale by larger of scales
@@ -428,6 +427,9 @@ class ArithmeticSharedTensor:
         result.div_(re_scale)
 
         yield result
+
+    def multi_mul_(self, *others: "ArithmeticSharedTensor", **kwargs):
+        return self.multi_mul(*others, inplace=True, **kwargs)
 
     def add(self, y):
         """Perform element-wise addition"""

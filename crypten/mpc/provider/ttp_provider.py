@@ -48,10 +48,6 @@ class TrustedThirdParty(TupleProvider):
 
         return a, b, c
 
-    def async_generate_additive_triple(self, size0, size1, op, device=None, *args, **kwargs):
-        """Generate multiplicative triples of given sizes"""
-        return GenAddTripleTTPAction(size0, size1, op, device, *args, **kwargs)
-
     def square(self, size, device=None):
         """Generate square double of given size"""
         generator = TTPClient.get().get_generator(device=device)
@@ -66,10 +62,6 @@ class TrustedThirdParty(TupleProvider):
         r = ArithmeticSharedTensor.from_shares(r, precision=0)
         r2 = ArithmeticSharedTensor.from_shares(r2, precision=0)
         return r, r2
-
-    def async_square(self, size, device=None):
-        """Generate square double of given size"""
-        return SquareTTPAction(size, device)
 
     def generate_binary_triple(self, size0, size1, device=None):
         """Generate binary triples of given size"""

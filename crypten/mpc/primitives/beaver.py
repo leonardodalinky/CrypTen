@@ -5,6 +5,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import functools
+import itertools
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -15,7 +18,13 @@ from crypten.common.util import count_wraps
 from crypten.config import cfg
 
 if TYPE_CHECKING:
-    from crypten.mpc.provider.ttp_provider import GenAddTripleTTPAction, SquareTTPAction
+    from crypten.mpc.provider.ttp_provider import (
+        GenAddTripleTTPAction,
+        MultiMulTTPAction,
+        SquareTTPAction,
+    )
+
+    from .arithmetic import ArithmeticSharedTensor
 
 
 class IgnoreEncodings:
@@ -97,27 +106,63 @@ def __beaver_protocol(op, x, y, ttp_action: GenAddTripleTTPAction | None = None,
 
 
 def mul(x, y, ttp_action: GenAddTripleTTPAction | None = None):
-    return __beaver_protocol("mul", x, y)
+    return __beaver_protocol("mul", x, y, ttp_action=ttp_action)
+
+
+def multi_mul(*tensors: ArithmeticSharedTensor, ttp_action: MultiMulTTPAction | None = None):
+    n = len(tensors)
+    assert n >= 2, "multi_mul requires at least 2 tensors"
+
+    if ttp_action is None:
+        from crypten.mpc.provider.ttp_provider import MultiMulTTPAction
+
+        ttp_action = MultiMulTTPAction(n, tensors[0]._tensor.size(), tensors[0].device)
+    ttp_action.wait()
+    terms = ttp_action.get_result()  # length of `2**n - 1`
+    assert len(terms) == 2**n - 1, "multi_mul requires 2^n - 1 terms"
+
+    # reveal all delta
+    with IgnoreEncodings([*tensors, *terms]):
+        deltas = ArithmeticSharedTensor.reveal_batch(
+            [tensor - term for tensor, term in zip(tensors, terms[:n])]
+        )  # length of `n`
+
+    # `delta_order = n`'s term
+    ret: ArithmeticSharedTensor = terms[-1].clone()
+    for term_order in range(1, n):
+        term_order_bidx = sum(math.comb(n, i) for i in range(1, term_order))
+        term_order_eidx = term_order_bidx + math.comb(n, term_order)
+        cur_terms = terms[term_order_bidx:term_order_eidx]
+        for term_indices, cur_term in zip(itertools.combinations(range(n), term_order), cur_terms):
+            term_indices: list[int]
+            cur_term: ArithmeticSharedTensor
+            # compute current term to be added to result
+            tmp = cur_term._tensor.clone()
+            delta_indices = [i for i in range(n) if i not in term_indices]
+            for delta_idx in delta_indices:
+                tmp = tmp * deltas[delta_idx]
+            ret._tensor += tmp
+    return ret
 
 
 def matmul(x, y, ttp_action: GenAddTripleTTPAction | None = None):
-    return __beaver_protocol("matmul", x, y)
+    return __beaver_protocol("matmul", x, y, ttp_action=ttp_action)
 
 
 def conv1d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
-    return __beaver_protocol("conv1d", x, y, **kwargs)
+    return __beaver_protocol("conv1d", x, y, ttp_action=ttp_action, **kwargs)
 
 
 def conv2d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
-    return __beaver_protocol("conv2d", x, y, **kwargs)
+    return __beaver_protocol("conv2d", x, y, ttp_action=ttp_action, **kwargs)
 
 
 def conv_transpose1d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
-    return __beaver_protocol("conv_transpose1d", x, y, **kwargs)
+    return __beaver_protocol("conv_transpose1d", x, y, ttp_action=ttp_action, **kwargs)
 
 
 def conv_transpose2d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
-    return __beaver_protocol("conv_transpose2d", x, y, **kwargs)
+    return __beaver_protocol("conv_transpose2d", x, y, ttp_action=ttp_action, **kwargs)
 
 
 def square(x, ttp_action: SquareTTPAction | None = None):
