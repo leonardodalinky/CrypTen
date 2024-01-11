@@ -5,8 +5,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-import crypten
 import torch
+
+import crypten
+from crypten.mpc import low_latency_enabled
+from crypten.mpc.provider.ttp_provider import TTPActionGroup
 
 from ..tensor_types import is_tensor
 
@@ -41,7 +44,12 @@ def pow(self, p, **kwargs):
     elif p % 2 == 0:
         return self.square().pow(p // 2)
     else:
-        x = self.square().mul_(self)
+        if low_latency_enabled():
+            g = self.ll_multi_mul(self, self)
+            TTPActionGroup(next(g)).wait()
+            x = next(g)
+        else:
+            x = self.square().mul_(self)
         return x.pow((p - 1) // 2)
 
 
@@ -82,9 +90,7 @@ def polynomial(self, coeffs, func="mul"):
     # Compute terms of polynomial using exponentially growing tree
     terms = crypten.stack([self, self.square()])
     while terms.size(0) < coeffs.size(0):
-        highest_term = terms.index_select(
-            0, torch.tensor(terms.size(0) - 1, device=self.device)
-        )
+        highest_term = terms.index_select(0, torch.tensor(terms.size(0) - 1, device=self.device))
         new_terms = getattr(terms, func)(highest_term)
         terms = crypten.cat([terms, new_terms])
 

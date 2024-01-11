@@ -579,9 +579,45 @@ class ArithmeticSharedTensor:
         """Perform a 1D convolution using the given kernel"""
         return self._arithmetic_function(kernel, "conv1d", **kwargs)
 
+    def ll_conv1d(self, kernel, **kwargs):
+        """Low latency 1D convolution using the given kernel"""
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        ttp_action = TTP.GenAddTripleTTPAction(
+            self._tensor.size(), kernel.share.size(), "conv1d", self.device
+        )
+        if self._arithmetic_function_need_scale(kernel, "conv1d"):
+            wraps_ttp_action = TTP.WrapsTTPAction(ttp_action.get_result_size(), self.device)
+            yield TTP.TTPActionGroup(ttp_action, wraps_ttp_action)
+            yield self.conv1d(
+                kernel, ttp_action=ttp_action, wraps_ttp_action=wraps_ttp_action, **kwargs
+            )
+        else:
+            yield ttp_action
+            yield self.conv1d(kernel, ttp_action=ttp_action, **kwargs)
+
     def conv2d(self, kernel, **kwargs):
         """Perform a 2D convolution using the given kernel"""
         return self._arithmetic_function(kernel, "conv2d", **kwargs)
+
+    def ll_conv2d(self, kernel, **kwargs):
+        """Low latency 2D convolution using the given kernel"""
+        assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
+        import crypten.mpc.provider.ttp_provider as TTP
+
+        ttp_action = TTP.GenAddTripleTTPAction(
+            self._tensor.size(), kernel.share.size(), "conv2d", self.device
+        )
+        if self._arithmetic_function_need_scale(kernel, "conv2d"):
+            wraps_ttp_action = TTP.WrapsTTPAction(ttp_action.get_result_size(), self.device)
+            yield TTP.TTPActionGroup(ttp_action, wraps_ttp_action)
+            yield self.conv2d(
+                kernel, ttp_action=ttp_action, wraps_ttp_action=wraps_ttp_action, **kwargs
+            )
+        else:
+            yield ttp_action
+            yield self.conv2d(kernel, ttp_action=ttp_action, **kwargs)
 
     def conv_transpose1d(self, kernel, **kwargs):
         """Perform a 1D transpose convolution (deconvolution) using the given kernel"""

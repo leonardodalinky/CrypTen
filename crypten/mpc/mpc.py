@@ -12,6 +12,8 @@ from crypten.common.tensor_types import is_tensor
 from crypten.common.util import torch_stack
 from crypten.config import cfg
 from crypten.cuda import CUDALongTensor
+from crypten.mpc import low_latency_enabled
+from crypten.mpc.provider.ttp_provider import TTPActionGroup
 
 from ..cryptensor import CrypTensor
 from ..encoder import FixedPointEncoder
@@ -331,6 +333,15 @@ class MPCTensor(CrypTensor):
         result._tensor = next(g)
         yield result
 
+    def ll_square(self):
+        result = self.shallow_copy()
+        g = result._tensor.ll_square()
+        # action
+        yield next(g)
+        # final result
+        result._tensor = next(g)
+        yield result
+
 
 UNARY_FUNCTIONS = [
     "avg_pool2d",
@@ -353,7 +364,12 @@ BINARY_FUNCTIONS = [
 def _add_unary_passthrough_function(name):
     def unary_wrapper_function(self, *args, **kwargs):
         result = self.shallow_copy()
-        result._tensor = getattr(result._tensor, name)(*args, **kwargs)
+        if low_latency_enabled() and name == "square":
+            g = getattr(result._tensor, f"ll_{name}")(*args, **kwargs)
+            TTPActionGroup(next(g)).wait()
+            result._tensor = next(g)
+        else:
+            result._tensor = getattr(result._tensor, name)(*args, **kwargs)
         return result
 
     setattr(MPCTensor, name, unary_wrapper_function)
@@ -364,7 +380,12 @@ def _add_binary_passthrough_function(name):
         result = self.shallow_copy()
         if isinstance(value, MPCTensor):
             value = value._tensor
-        result._tensor = getattr(result._tensor, name)(value, *args, **kwargs)
+        if low_latency_enabled() and name in ["mul", "matmul", "conv1d", "conv2d"]:
+            g = getattr(result._tensor, f"ll_{name}")(value, *args, **kwargs)
+            TTPActionGroup(next(g)).wait()
+            result._tensor = next(g)
+        else:
+            result._tensor = getattr(result._tensor, name)(value, *args, **kwargs)
         return result
 
     setattr(MPCTensor, name, binary_wrapper_function)

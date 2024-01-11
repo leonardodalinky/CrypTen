@@ -12,6 +12,7 @@ import torch
 import crypten
 from crypten.config import cfg
 from crypten.mpc import low_latency_enabled
+from crypten.mpc.provider.ttp_provider import TTPActionGroup
 
 __all__ = [
     "exp",
@@ -49,7 +50,13 @@ def exp(self):
 
     result = 1 + self.div(2**iters)
     if low_latency_enabled():
-        pass
+        new_iters = round(iters * math.log(2, 3))
+        new_iters = min(new_iters, 1)
+        for _ in range(new_iters):
+            g = result.ll_multi_mul(result, result)
+            action_or_group = next(g)
+            TTPActionGroup(action_or_group).wait()
+            result = next(g)
     else:
         for _ in range(iters):
             result = result.square()
@@ -165,11 +172,19 @@ def reciprocal(self, input_in_01=False):
             result = 3 * (1 - 2 * self).exp() + 0.003
         else:
             result = initial
-        for _ in range(nr_iters):
-            if hasattr(result, "square"):
-                result += result - result.square().mul_(self)
-            else:
-                result = 2 * result - result * result * self
+        if low_latency_enabled():
+            for _ in range(nr_iters):
+                g = result.ll_multi_mul(result, self)
+                action_or_group = next(g)
+                TTPActionGroup(action_or_group).wait()
+                tmp = next(g)
+                result = 2 * result - tmp
+        else:
+            for _ in range(nr_iters):
+                if hasattr(result, "square"):
+                    result += result - result.square().mul_(self)
+                else:
+                    result = 2 * result - result * result * self
         return result
     elif method == "log":
         log_iters = cfg.functions.reciprocal_log_iters
@@ -203,8 +218,16 @@ def inv_sqrt(self):
         y = initial
 
     # Newton Raphson iterations for inverse square root
-    for _ in range(iters):
-        y = y.mul_(3 - self * y.square()).div_(2)
+    if low_latency_enabled():
+        for _ in range(iters):
+            g = self.ll_multi_mul(y, y)
+            action_or_group = next(g)
+            TTPActionGroup(action_or_group).wait()
+            tmp = next(g)
+            y = y.mul_(3 - tmp).div_(2)
+    else:
+        for _ in range(iters):
+            y = y.mul_(3 - self * y.square()).div_(2)
     return y
 
 
@@ -239,12 +262,23 @@ def _eix(self):
     im *= 2
 
     # Compute (a + bi)^2 -> (a^2 - b^2) + (2ab)i `iterations` times
-    for _ in range(iterations - 1):
-        a2 = re.square()
-        b2 = im.square()
-        im = im.mul_(re)
-        im._tensor *= 2
-        re = a2 - b2
+    if low_latency_enabled():
+        for _ in range(iterations - 1):
+            g1, g2, g3 = re.ll_square(), im.ll_square(), im.ll_mul(re)
+            ag1, ag2, ag3 = next(g1), next(g2), next(g3)
+            TTPActionGroup(ag1, ag2, ag3).wait()
+            a2 = next(g1)
+            b2 = next(g2)
+            im = next(g3)
+            im._tensor *= 2
+            re = a2 - b2
+    else:
+        for _ in range(iterations - 1):
+            a2 = re.square()
+            b2 = im.square()
+            im = im.mul_(re)
+            im._tensor *= 2
+            re = a2 - b2
 
     return re, im
 
