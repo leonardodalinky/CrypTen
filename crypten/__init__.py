@@ -13,19 +13,19 @@ import logging
 import os
 import warnings
 
+import torch
+
 import crypten.common  # noqa: F401
 import crypten.communicator as comm
 import crypten.config  # noqa: F401
 import crypten.mpc  # noqa: F401
 import crypten.nn  # noqa: F401
 import crypten.optim  # noqa: F401
-import torch
 
 # other imports:
 from . import debug
 from .config import cfg
 from .cryptensor import CrypTensor
-
 
 # functions controlling autograd:
 no_grad = CrypTensor.no_grad
@@ -61,7 +61,7 @@ def init(config_file=None, party_name=None, device=None):
 
     # Return and raise warning if initialized
     if comm.is_initialized():
-        warnings.warn("CrypTen is already initialized.", RuntimeWarning)
+        # warnings.warn("CrypTen is already initialized.", RuntimeWarning)
         return
 
     # Initialize communicator
@@ -132,9 +132,7 @@ def get_default_cryptensor_type():
 def get_cryptensor_type(tensor):
     """Gets the type name of the specified `tensor` `CrypTensor`."""
     if not isinstance(tensor, CrypTensor):
-        raise ValueError(
-            "Specified tensor is not a CrypTensor: {}".format(type(tensor))
-        )
+        raise ValueError("Specified tensor is not a CrypTensor: {}".format(type(tensor)))
     for name, cls in CrypTensor.__CRYPTENSOR_TYPES__.items():
         if isinstance(tensor, cls):
             return name
@@ -187,9 +185,7 @@ def _setup_prng():
 
     # Initialize RNG Generators
     for key in generators.keys():
-        generators[key][torch.device("cpu")] = torch.Generator(
-            device=torch.device("cpu")
-        )
+        generators[key][torch.device("cpu")] = torch.Generator(device=torch.device("cpu"))
 
     if torch.cuda.is_available():
         cuda_device_names = ["cuda"]
@@ -487,9 +483,7 @@ def rand(*sizes, device=None, cryptensor_type=None):
     with no_grad():
         if cryptensor_type is None:
             cryptensor_type = get_default_cryptensor_type()
-        return CrypTensor.__CRYPTENSOR_TYPES__[cryptensor_type].rand(
-            *sizes, device=device
-        )
+        return CrypTensor.__CRYPTENSOR_TYPES__[cryptensor_type].rand(*sizes, device=device)
 
 
 def randn(*sizes, cryptensor_type=None):
@@ -550,9 +544,7 @@ def print(*args, in_order=False, dst=0, **kwargs):
             This can be an integer or list of integers denoting a single rank or
             multiple ranks to print from.
     """
-    __multiprocess_print_helper(
-        builtins.print, *args, in_order=in_order, dst=dst, **kwargs
-    )
+    __multiprocess_print_helper(builtins.print, *args, in_order=in_order, dst=dst, **kwargs)
 
 
 def log(*args, in_order=False, dst=0, **kwargs):
@@ -571,9 +563,7 @@ def log(*args, in_order=False, dst=0, **kwargs):
             This can be an integer or list of integers denoting a single rank or
             multiple ranks to log from.
     """
-    __multiprocess_print_helper(
-        logging.info, *args, in_order=in_order, dst=dst, **kwargs
-    )
+    __multiprocess_print_helper(logging.info, *args, in_order=in_order, dst=dst, **kwargs)
 
 
 # TupleProvider tracing functions

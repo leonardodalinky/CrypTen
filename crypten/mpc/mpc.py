@@ -12,8 +12,6 @@ from crypten.common.tensor_types import is_tensor
 from crypten.common.util import torch_stack
 from crypten.config import cfg
 from crypten.cuda import CUDALongTensor
-from crypten.mpc import low_latency_enabled
-from crypten.mpc.provider.ttp_provider import TTPActionGroup
 
 from ..cryptensor import CrypTensor
 from ..encoder import FixedPointEncoder
@@ -363,8 +361,12 @@ BINARY_FUNCTIONS = [
 
 def _add_unary_passthrough_function(name):
     def unary_wrapper_function(self, *args, **kwargs):
+        from crypten.mpc import low_latency_enabled
+
         result = self.shallow_copy()
         if low_latency_enabled() and name == "square":
+            from crypten.mpc.provider.ttp_provider import TTPActionGroup
+
             g = getattr(result._tensor, f"ll_{name}")(*args, **kwargs)
             TTPActionGroup(next(g)).wait()
             result._tensor = next(g)
@@ -380,7 +382,12 @@ def _add_binary_passthrough_function(name):
         result = self.shallow_copy()
         if isinstance(value, MPCTensor):
             value = value._tensor
+
+        from crypten.mpc import low_latency_enabled
+
         if low_latency_enabled() and name in ["mul", "matmul", "conv1d", "conv2d"]:
+            from crypten.mpc.provider.ttp_provider import TTPActionGroup
+
             g = getattr(result._tensor, f"ll_{name}")(value, *args, **kwargs)
             TTPActionGroup(next(g)).wait()
             result._tensor = next(g)

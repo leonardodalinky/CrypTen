@@ -763,7 +763,7 @@ class MultiMulTTPAction(TTPAction):
 
 
 class TTPActionGroup:
-    def __init__(self, *actions_or_groups: TTPAction | "TTPActionGroup") -> None:
+    def __init__(self, *actions_or_groups: "TTPAction | TTPActionGroup") -> None:
         self.actions = []
         for action_or_group in actions_or_groups:
             if isinstance(action_or_group, TTPAction):
@@ -799,7 +799,7 @@ class TTPActionGroup:
     def get_result(self) -> tuple[Any]:
         return tuple(action.get_result() for action in self.actions)
 
-    def add_(self, *actions_or_groups: TTPAction | "TTPActionGroup") -> "TTPActionGroup":
+    def add_(self, *actions_or_groups: "TTPAction | TTPActionGroup") -> "TTPActionGroup":
         """Adds actions to the group"""
         for action_or_group in actions_or_groups:
             if isinstance(action_or_group, TTPAction):

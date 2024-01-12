@@ -11,8 +11,6 @@ import torch
 
 import crypten
 from crypten.config import cfg
-from crypten.mpc import low_latency_enabled
-from crypten.mpc.provider.ttp_provider import TTPActionGroup
 
 __all__ = [
     "exp",
@@ -49,7 +47,11 @@ def exp(self):
     iters = cfg.functions.exp_iterations
 
     result = 1 + self.div(2**iters)
+    from crypten.mpc import low_latency_enabled
+
     if low_latency_enabled():
+        from crypten.mpc.provider.ttp_provider import TTPActionGroup
+
         new_iters = round(iters * math.log(2, 3))
         new_iters = min(new_iters, 1)
         for _ in range(new_iters):
@@ -172,7 +174,12 @@ def reciprocal(self, input_in_01=False):
             result = 3 * (1 - 2 * self).exp() + 0.003
         else:
             result = initial
+
+        from crypten.mpc import low_latency_enabled
+
         if low_latency_enabled():
+            from crypten.mpc.provider.ttp_provider import TTPActionGroup
+
             for _ in range(nr_iters):
                 g = result.ll_multi_mul(result, self)
                 action_or_group = next(g)
@@ -218,7 +225,11 @@ def inv_sqrt(self):
         y = initial
 
     # Newton Raphson iterations for inverse square root
+    from crypten.mpc import low_latency_enabled
+
     if low_latency_enabled():
+        from crypten.mpc.provider.ttp_provider import TTPActionGroup
+
         for _ in range(iters):
             g = self.ll_multi_mul(y, y)
             action_or_group = next(g)
@@ -262,7 +273,11 @@ def _eix(self):
     im *= 2
 
     # Compute (a + bi)^2 -> (a^2 - b^2) + (2ab)i `iterations` times
+    from crypten.mpc import low_latency_enabled
+
     if low_latency_enabled():
+        from crypten.mpc.provider.ttp_provider import TTPActionGroup
+
         for _ in range(iterations - 1):
             g1, g2, g3 = re.ll_square(), im.ll_square(), im.ll_mul(re)
             ag1, ag2, ag3 = next(g1), next(g2), next(g3)

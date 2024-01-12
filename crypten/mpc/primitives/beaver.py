@@ -44,7 +44,9 @@ class IgnoreEncodings:
             tensor.encoder._scale = self.encodings_cache[i]
 
 
-def __beaver_protocol(op, x, y, ttp_action: GenAddTripleTTPAction | None = None, *args, **kwargs):
+def __beaver_protocol(
+    op, x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None, *args, **kwargs
+):
     """Performs Beaver protocol for additively secret-shared tensors x and y
 
     1. Obtain uniformly random sharings [a],[b] and [c] = [a * b]
@@ -106,11 +108,11 @@ def __beaver_protocol(op, x, y, ttp_action: GenAddTripleTTPAction | None = None,
     return c
 
 
-def mul(x, y, ttp_action: GenAddTripleTTPAction | None = None):
+def mul(x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None):
     return __beaver_protocol("mul", x, y, ttp_action=ttp_action)
 
 
-def multi_mul(*tensors: ArithmeticSharedTensor, ttp_action: MultiMulTTPAction | None = None):
+def multi_mul(*tensors: "ArithmeticSharedTensor", ttp_action: "(MultiMulTTPAction | None)" = None):
     n = len(tensors)
     assert n >= 2, "multi_mul requires at least 2 tensors"
 
@@ -146,27 +148,27 @@ def multi_mul(*tensors: ArithmeticSharedTensor, ttp_action: MultiMulTTPAction | 
     return ret
 
 
-def matmul(x, y, ttp_action: GenAddTripleTTPAction | None = None):
+def matmul(x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None):
     return __beaver_protocol("matmul", x, y, ttp_action=ttp_action)
 
 
-def conv1d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
+def conv1d(x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None, **kwargs):
     return __beaver_protocol("conv1d", x, y, ttp_action=ttp_action, **kwargs)
 
 
-def conv2d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
+def conv2d(x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None, **kwargs):
     return __beaver_protocol("conv2d", x, y, ttp_action=ttp_action, **kwargs)
 
 
-def conv_transpose1d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
+def conv_transpose1d(x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None, **kwargs):
     return __beaver_protocol("conv_transpose1d", x, y, ttp_action=ttp_action, **kwargs)
 
 
-def conv_transpose2d(x, y, ttp_action: GenAddTripleTTPAction | None = None, **kwargs):
+def conv_transpose2d(x, y, ttp_action: "(GenAddTripleTTPAction | None)" = None, **kwargs):
     return __beaver_protocol("conv_transpose2d", x, y, ttp_action=ttp_action, **kwargs)
 
 
-def square(x, ttp_action: SquareTTPAction | None = None):
+def square(x, ttp_action: "(SquareTTPAction | None)" = None):
     """Computes the square of `x` for additively secret-shared tensor `x`
 
     1. Obtain uniformly random sharings [r] and [r2] = [r * r]
@@ -186,7 +188,7 @@ def square(x, ttp_action: SquareTTPAction | None = None):
     return r2 + 2 * r * epsilon + epsilon * epsilon
 
 
-def wraps(x, ttp_action: WrapsTTPAction | None = None):
+def wraps(x, ttp_action: "(WrapsTTPAction | None)" = None):
     """Privately computes the number of wraparounds for a set a shares
 
     To do so, we note that:
@@ -220,7 +222,7 @@ def wraps(x, ttp_action: WrapsTTPAction | None = None):
     return theta_x
 
 
-def truncate(x, y, wraps_ttp_action: WrapsTTPAction | None = None):
+def truncate(x, y, wraps_ttp_action: "(WrapsTTPAction | None)" = None):
     """Protocol to divide an ArithmeticSharedTensor `x` by a constant integer `y`"""
     wrap_count = wraps(x, ttp_action=wraps_ttp_action)
     x.share = x.share.div_(y, rounding_mode="trunc")
