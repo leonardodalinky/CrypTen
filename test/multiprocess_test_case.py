@@ -14,10 +14,11 @@ import unittest
 import warnings
 from functools import wraps
 
-import crypten.communicator as comm
-import crypten.debug
 import torch
 import torch.distributed as dist
+
+import crypten.communicator as comm
+import crypten.debug
 from crypten.config import cfg
 
 
@@ -38,10 +39,7 @@ def get_random_test_tensor(
     if min_value is None:
         min_value = -max_value
     if is_float:
-        tensor = (
-            torch.rand(torch.Size(size), device=device) * (max_value - min_value)
-            + min_value
-        )
+        tensor = torch.rand(torch.Size(size), device=device) * (max_value - min_value) + min_value
     else:
         tensor = torch.randint(
             min_value, max_value, torch.Size(size), dtype=torch.int64, device=device
@@ -86,7 +84,7 @@ def get_random_linear(in_channels, out_channels):
 class MultiProcessTestCase(unittest.TestCase):
     MAIN_PROCESS_RANK = -1
     DEFAULT_DEVICE = "cpu"
-    DEFAULT_WORLD_SIZE = 2
+    DEFAULT_WORLD_SIZE = 3
 
     @staticmethod
     def join_or_run(fn):

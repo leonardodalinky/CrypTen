@@ -491,6 +491,15 @@ class ArithmeticSharedTensor:
         assert cfg.mpc.protocol == "beaver", "Only support beaver protocol now"
         import crypten.mpc.provider.ttp_provider as TTP
 
+        if isinstance(y, int):
+            result = self.clone()
+            result.share = self.share * y
+            yield TTP.DummyTTPAction()
+            yield result
+        elif isinstance(y, float):
+            yield TTP.DummyTTPAction()
+            yield self.mul(y)
+
         ttp_action = TTP.GenAddTripleTTPAction(
             self._tensor.size(), y.share.size(), "mul", self.device
         )

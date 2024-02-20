@@ -38,9 +38,9 @@ functions:
   erf_iterations: 8
 mpc:
   active_security: False
-  provider: "TFP"
+  provider: "TTP"
   protocol: "beaver"
-  low_latency: False
+  low_latency: True
 nn:
   dpsmpc:
     protocol: "layer_estimation"

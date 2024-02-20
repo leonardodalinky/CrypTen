@@ -206,7 +206,7 @@ class TTPClient:
             for size, request_args in zip(sizes, request_args_list):
                 result = result_buf[: size.numel()].view(size)
                 result = result.to(device=request_args["device"])
-                result_buf = result_buf[size:]
+                result_buf = result_buf[size.numel() :]
                 results.append(result)
 
             return results
@@ -521,7 +521,7 @@ class GenAddTripleTTPAction(TTPAction):
         """Args of TTP requrests"""
         if comm.get().get_rank() == 0:
             return {
-                "func_name": "additive",
+                "function": "additive",
                 "device": str(self.device) if self.device is not None else None,
                 "args": (self.size0, self.size1, self.op, *self.args),
                 "kwargs": self.kwargs,
@@ -590,7 +590,7 @@ class SquareTTPAction(TTPAction):
         """Args of TTP requrests"""
         if comm.get().get_rank() == 0:
             return {
-                "func_name": "square",
+                "function": "square",
                 "device": str(self.device) if self.device is not None else None,
                 "args": (self.size,),
                 "kwargs": {},
@@ -644,7 +644,7 @@ class WrapsTTPAction(TTPAction):
         """Args of TTP requrests"""
         if comm.get().get_rank() == 0:
             return {
-                "func_name": "wraps",
+                "function": "wraps",
                 "device": str(self.device) if self.device is not None else None,
                 "args": (self.size,),
                 "kwargs": {},
@@ -728,7 +728,7 @@ class MultiMulTTPAction(TTPAction):
         """Args of TTP requrests"""
         if comm.get().get_rank() == 0:
             return {
-                "func_name": "multi_mul",
+                "function": "multi_mul",
                 "device": str(self.device) if self.device is not None else None,
                 "args": (self.n, self.size, *self.args),
                 "kwargs": self.kwargs,
