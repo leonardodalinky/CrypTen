@@ -47,28 +47,43 @@ def parse_args():
         help="The port used by master instance for distributed training",
     )
     # docker-related
-    parser.add_argument(
+    docker_group = parser.add_argument_group("Docker-related")
+    docker_group.add_argument(
         "--dockerfile",
         type=str,
         default=osp.join(osp.dirname(__file__), "..", "Dockerfile"),
         help="The directory for dockerfile to build the docker image from",
     )
-    parser.add_argument(
+    docker_group.add_argument(
         "--ttp-dockerfile",
         type=str,
         default=osp.join(osp.dirname(__file__), "..", "TTP.Dockerfile"),
         help="The directory for dockerfile to build the TTP docker image from",
     )
-    parser.add_argument(
+    docker_group.add_argument(
         "--script-entrypoint",
         type=str,
         default="launcher.py",
         help="Entrypoint of the script in `script-dir` to be launched",
     )
-    parser.add_argument(
+    docker_group.add_argument(
         "--force-rebuild",
         action="store_true",
         help="Force to rebuild the docker images of normal and TTP parties",
+    )
+    # docker-tc related
+    docker_tc_group = parser.add_argument_group("Docker Traffic Control")
+    docker_tc_group.add_argument(
+        "--latency",
+        type=float,
+        required=False,
+        help="The latency (ms) to be added to the network",
+    )
+    docker_tc_group.add_argument(
+        "--bandwidth",
+        type=float,
+        required=False,
+        help="The max bandwidth (mbps) to be allowed in the network",
     )
     # positional
     parser.add_argument(
@@ -111,6 +126,8 @@ class DockerCtx:
         script_dir: str,
         script_entrypoint: str = "launcher.py",
         script_args: list[str] = [],
+        latency: int = None,
+        bandwidth: int = None,
     ) -> None:
         self.__is_setup__ = False
         self.client = client
@@ -125,6 +142,8 @@ class DockerCtx:
         assert osp.exists(
             osp.join(self.script_dir, self.script_entrypoint)
         ), "Entrypoint file does not exist"
+        self.latency = latency
+        self.bandwidth = bandwidth
         # docker objs
         self.network: Network | None = None
         self.containers: list[Container] = []
@@ -139,6 +158,18 @@ class DockerCtx:
     def __exit__(self, type, value, traceback):
         self.cleanup()
 
+    @property
+    def container_labels(self):
+        d = {}
+        if self.latency is not None:
+            d["com.docker-tc.enabled"] = "1"
+            d["com.docker-tc.delay"] = f"{self.latency}ms"
+        if self.bandwidth is not None:
+            d["com.docker-tc.enabled"] = "1"
+            d["com.docker-tc.limit"] = f"{self.bandwidth}mbps"
+
+        return d
+
     def setup(self):
         self.__is_setup__ = True
         gpu_count = torch.cuda.device_count()
@@ -152,9 +183,7 @@ class DockerCtx:
         uid = str(uuid.uuid4()).replace("-", "")
         uid = uid[:8]
         logging.debug(f"Creating network: crypten_{uid}")
-        self.network = self.client.networks.create(
-            f"{self.tag_prefix}-crypten-{uid}", driver="bridge"
-        )
+        self.network = self.client.networks.create(f"{self.tag_prefix}-crypten-{uid}")
         #####################
         #                   #
         #    run dockers    #
@@ -176,6 +205,7 @@ class DockerCtx:
                     "MASTER_ADDR": f"{self.tag_prefix}-crypten-{uid}-0",
                     "MASTER_PORT": str(self.master_port),
                 },
+                labels=self.container_labels,
                 entrypoint=["python", self.script_entrypoint],
                 command=self.script_args,
                 detach=True,
@@ -215,6 +245,7 @@ class DockerCtx:
                     "MASTER_ADDR": f"{self.tag_prefix}-crypten-{uid}-0",
                     "MASTER_PORT": str(self.master_port),
                 },
+                labels=self.container_labels,
                 detach=True,
                 network=self.network.name,
                 user=os.getuid(),
@@ -274,6 +305,15 @@ def main():
     assert os.getenv("CUDA_VISIBLE_DEVICES") is None, "CUDA_VISIBLE_DEVICES should not be set"
     args = parse_args()
     client = docker.from_env()
+    # check for docker-tc
+    if args.latency is not None or args.bandwidth is not None:
+        try:
+            client.containers.get("docker-tc")
+            logging.info("Found existing container named `docker-tc`")
+        except docker.errors.NotFound:
+            logging.warning(
+                "Container named `docker-tc` is not running. Please run `docker-tc` first."
+            )
     ######################
     #                    #
     #    build images    #
@@ -313,6 +353,8 @@ def main():
         script_dir=args.script_dir,
         script_entrypoint=args.script_entrypoint,
         script_args=args.script_args,
+        latency=args.latency,
+        bandwidth=args.bandwidth,
     )
     with docker_ctx:
         logging.info("Running docker containers...")
