@@ -185,7 +185,11 @@ class DockerCtx:
                     osp.abspath(self.script_dir): {
                         "bind": "/app",
                         "mode": "rw",
-                    }
+                    },
+                    osp.abspath(osp.join(osp.dirname(__file__), "..", "configs")): {
+                        "bind": "/framework/configs",
+                        "mode": "ro",
+                    },
                 },
                 device_requests=[
                     docker.types.DeviceRequest(
@@ -214,6 +218,12 @@ class DockerCtx:
                 detach=True,
                 network=self.network.name,
                 user=os.getuid(),
+                volumes={
+                    osp.abspath(osp.join(osp.dirname(__file__), "..", "configs")): {
+                        "bind": "/framework/configs",
+                        "mode": "ro",
+                    },
+                },
                 device_requests=[
                     docker.types.DeviceRequest(
                         device_ids=[str(gpu_count - 1)], capabilities=[["gpu"]]

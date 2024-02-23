@@ -8,8 +8,9 @@
 import logging
 import time
 
-import crypten
 import torch
+
+import crypten
 from examples.meters import AverageMeter
 
 
@@ -34,9 +35,7 @@ def train_linear_svm(features, labels, epochs=50, lr=0.5, print_time=False):
 
         # Print Accuracy once
         if crypten.communicator.get().get_rank() == 0:
-            print(
-                f"Epoch {epoch} --- Training Accuracy %.2f%%" % (accuracy.item() * 100)
-            )
+            print(f"Epoch {epoch} --- Training Accuracy %.2f%%" % (accuracy.item() * 100))
 
         # Backward
         loss_grad = -labels * (1 - correct) * 0.5  # Hinge loss
@@ -65,9 +64,7 @@ def evaluate_linear_svm(features, labels, w, b):
         print("Test accuracy %.2f%%" % (accuracy.item() * 100))
 
 
-def run_mpc_linear_svm(
-    epochs=50, examples=50, features=100, lr=0.5, skip_plaintext=False
-):
+def run_mpc_linear_svm(epochs=50, examples=50, features=100, lr=0.5, skip_plaintext=False):
     crypten.init()
 
     # Set random seed for reproducibility
@@ -106,3 +103,5 @@ def run_mpc_linear_svm(
         logging.info(b_torch)
     logging.info("CrypTen Bias:")
     logging.info(b.get_plain_text())
+
+    crypten.print_communication_stats()
