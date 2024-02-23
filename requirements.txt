@@ -2,6 +2,7 @@ future
 omegaconf>=2.0.6
 onnx>=1.7.0
 pandas>=1.2.2
+pyfunctional>=1.4.3
 pyyaml>=5.3.1
 scikit-learn
 scipy>=1.6.0

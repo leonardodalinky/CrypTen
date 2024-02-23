@@ -13,6 +13,7 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
+from functional import seq
 
 import crypten
 import crypten.communicator as comm
@@ -393,7 +394,8 @@ class TTPServer:
         return c0
 
     def wraps(self, size):
-        r = [generate_random_ring_element(size, generator=g) for g in self.generators]
+        gens = self._get_generators(device=self.device)
+        r = [generate_random_ring_element(size, generator=g) for g in gens]
         theta_r = count_wraps(r)
 
         return theta_r - self._get_additive_PRSS(size, remove_rank=True)
@@ -515,7 +517,13 @@ class GenAddTripleTTPAction(TTPAction):
         a = generate_random_ring_element(self.size0, generator=generator, device=self.device)
         b = generate_random_ring_element(self.size1, generator=generator, device=self.device)
 
-        return a, b
+        # for rank != 0
+        if comm.get().get_rank() != 0:
+            c_size = getattr(torch, self.op)(a, b, *self.args, **self.kwargs).size()
+            c = generate_random_ring_element(c_size, generator=generator, device=self.device)
+            return a, b, c
+        else:
+            return a, b, None
 
     def ttp_request_args(self) -> dict[str, Any] | None:
         """Args of TTP requrests"""
@@ -531,15 +539,10 @@ class GenAddTripleTTPAction(TTPAction):
 
     def post_request_stage(self, pre_stage_output: Any, ttp_request_result: torch.LongTensor):
         """Post processing of the request"""
-        a, b = pre_stage_output
+        a, b, c = pre_stage_output
         if comm.get().get_rank() == 0:
             # Request c from TTP
             c = ttp_request_result
-        else:
-            # TODO: Compute size without executing computation
-            generator = TTPClient.get().get_generator(device=self.device)
-            c_size = self.get_result_size()
-            c = generate_random_ring_element(c_size, generator=generator, device=self.device)
 
         a = ArithmeticSharedTensor.from_shares(a, precision=0)
         b = ArithmeticSharedTensor.from_shares(b, precision=0)
@@ -584,7 +587,12 @@ class SquareTTPAction(TTPAction):
         generator = TTPClient.get().get_generator(device=self.device)
 
         r = generate_random_ring_element(self.size, generator=generator, device=self.device)
-        return r
+
+        if comm.get().get_rank() != 0:
+            r2 = generate_random_ring_element(self.size, generator=generator, device=self.device)
+            return r, r2
+        else:
+            return r, None
 
     def ttp_request_args(self) -> dict[str, Any] | None:
         """Args of TTP requrests"""
@@ -600,13 +608,10 @@ class SquareTTPAction(TTPAction):
 
     def post_request_stage(self, pre_stage_output: Any, ttp_request_result: torch.LongTensor):
         """Post processing of the request"""
-        r = pre_stage_output
+        r, r2 = pre_stage_output
         if comm.get().get_rank() == 0:
             # Request r2 from TTP
             r2 = ttp_request_result
-        else:
-            generator = TTPClient.get().get_generator(device=self.device)
-            r2 = generate_random_ring_element(self.size, generator=generator, device=self.device)
 
         r = ArithmeticSharedTensor.from_shares(r, precision=0)
         r2 = ArithmeticSharedTensor.from_shares(r2, precision=0)
@@ -638,7 +643,14 @@ class WrapsTTPAction(TTPAction):
         generator = TTPClient.get().get_generator(device=self.device)
 
         r = generate_random_ring_element(self.size, generator=generator, device=self.device)
-        return r
+
+        if comm.get().get_rank() != 0:
+            theta_r = generate_random_ring_element(
+                self.size, generator=generator, device=self.device
+            )
+            return r, theta_r
+        else:
+            return r, None
 
     def ttp_request_args(self) -> dict[str, Any] | None:
         """Args of TTP requrests"""
@@ -654,15 +666,10 @@ class WrapsTTPAction(TTPAction):
 
     def post_request_stage(self, pre_stage_output: Any, ttp_request_result: torch.LongTensor):
         """Post processing of the request"""
-        r = pre_stage_output
+        r, theta_r = pre_stage_output
         if comm.get().get_rank() == 0:
             # Request theta_r from TTP
             theta_r = ttp_request_result
-        else:
-            generator = TTPClient.get().get_generator(device=self.device)
-            theta_r = generate_random_ring_element(
-                self.size, generator=generator, device=self.device
-            )
 
         r = ArithmeticSharedTensor.from_shares(r, precision=0)
         theta_r = ArithmeticSharedTensor.from_shares(theta_r, precision=0)
@@ -764,7 +771,7 @@ class MultiMulTTPAction(TTPAction):
 
 class TTPActionGroup:
     def __init__(self, *actions_or_groups: "TTPAction | TTPActionGroup") -> None:
-        self.actions = []
+        self.actions: list[TTPAction] = []
         for action_or_group in actions_or_groups:
             if isinstance(action_or_group, TTPAction):
                 self.actions.append(action_or_group)
@@ -783,15 +790,32 @@ class TTPActionGroup:
         pre_stage_outputs = [action.pre_request_stage() for action in self.actions]
         # merge ttp request
         request_args_list = [action.ttp_request_args() for action in self.actions]
-        if all(request_args is not None for request_args in request_args_list):
-            ttp_results = TTPClient.get().batched_ttp_request(request_args_list)
-        else:
-            ttp_results = [None] * len(self.actions)
+        assert len(request_args_list) == len(self.actions)
+        # filter request args
+        valid_request_args_list = (
+            seq(request_args_list)
+            .zip(self.actions)
+            .filter(lambda x: x[0] is not None and not x[1].is_completed())
+            .map(lambda x: x[0])
+            .to_list()
+        )
+        valid_ttp_results = (
+            TTPClient.get().batched_ttp_request(valid_request_args_list)
+            if len(valid_request_args_list) > 0
+            else []
+        )
+        ttp_results = []
+        for request_args, action in zip(request_args_list, self.actions):
+            if request_args is not None and not action.is_completed():
+                ttp_results.append(valid_ttp_results.pop(0))
+            else:
+                ttp_results.append(None)
         # post stage
         for action, pre_stage_output, ttp_request_result in zip(
             self.actions, pre_stage_outputs, ttp_results
         ):
-            action.post_request_stage(pre_stage_output, ttp_request_result)
+            if not action.is_completed():
+                action.post_request_stage(pre_stage_output, ttp_request_result)
 
     def is_completed(self) -> bool:
         return all(action.is_completed() for action in self.actions)

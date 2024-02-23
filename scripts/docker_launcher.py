@@ -91,6 +91,15 @@ def has_image(client: docker.DockerClient, image_name: str) -> bool:
         return False
 
 
+def delete_image_if_exists(client: docker.DockerClient, image_name: str) -> None:
+    try:
+        image: Image = client.images.get(image_name)
+        logging.info(f"Removing existing image: {image_name}")
+        image.remove(force=True)
+    except docker.errors.ImageNotFound:
+        pass
+
+
 class DockerCtx:
     def __init__(
         self,
@@ -232,11 +241,11 @@ class DockerCtx:
         logging.info("Stopping docker containers of normal parties...")
         for container in self.containers:
             logging.debug(f"Removing container: {container.name}")
-            container.remove(force=True)
+            container.remove(link=False, force=True)
         if self.ttp_container:
             logging.info("Stopping docker container of TTP party...")
             logging.debug(f"Removing container: {self.ttp_container.name}")
-            self.ttp_container.remove(force=True)
+            self.ttp_container.remove(link=False, force=True)
         if self.network:
             logging.info("Removing docker network...")
             logging.debug(f"Removing network: {self.network.name}")
@@ -264,6 +273,7 @@ def main():
     normal_party_iname = f"{args.tag_prefix}/crypten:latest"
     if not has_image(client, normal_party_iname) or args.force_rebuild:
         logging.info(f"Building docker images of normal parties from: {args.dockerfile}")
+        delete_image_if_exists(client, normal_party_iname)
         client.images.build(
             path=osp.dirname(args.dockerfile),
             dockerfile=args.dockerfile,
@@ -275,6 +285,7 @@ def main():
     ttp_party_iname = f"{args.tag_prefix}/crypten-ttp:latest"
     if not has_image(client, ttp_party_iname) or args.force_rebuild:
         logging.info("Building docker image of TTP party...")
+        delete_image_if_exists(client, ttp_party_iname)
         client.images.build(
             path=osp.dirname(args.ttp_dockerfile),
             dockerfile=args.ttp_dockerfile,
