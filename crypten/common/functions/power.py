@@ -42,17 +42,7 @@ def pow(self, p, **kwargs):
     elif p % 2 == 0:
         return self.square().pow(p // 2)
     else:
-        from crypten.mpc import low_latency_enabled
-
-        if low_latency_enabled():
-            from crypten.mpc.provider.ttp_provider import TTPActionGroup
-
-            g = self.ll_multi_mul(self, self)
-            TTPActionGroup(next(g)).wait()
-            x = next(g)
-        else:
-            x = self.square().mul_(self)
-        return x.pow((p - 1) // 2)
+        return self * self.pow(p - 1)
 
 
 def pos_pow(self, p):

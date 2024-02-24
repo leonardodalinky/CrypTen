@@ -41,6 +41,7 @@ mpc:
   provider: "TTP"
   protocol: "beaver"
   low_latency: True
+  naive_ll_multi_mul: False
 nn:
   dpsmpc:
     protocol: "layer_estimation"

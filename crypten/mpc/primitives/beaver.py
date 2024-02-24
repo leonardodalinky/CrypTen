@@ -126,25 +126,34 @@ def multi_mul(*tensors: "ArithmeticSharedTensor", ttp_action: "(MultiMulTTPActio
 
     # reveal all delta
     with IgnoreEncodings([*tensors, *terms]):
+        from .arithmetic import ArithmeticSharedTensor
+
         deltas = ArithmeticSharedTensor.reveal_batch(
             [tensor - term for tensor, term in zip(tensors, terms[:n])]
         )  # length of `n`
 
-    # `delta_order = n`'s term
+    # `term_order = n`'s term
     ret: ArithmeticSharedTensor = terms[-1].clone()
+    # `term_order = 0`'s term
+    # NOTE: SHOULD not use `ret._tensor`, since here we only add a constant to this tensor,
+    #       and only rank-0 node should do addition
+    ret += math.prod(deltas)
     for term_order in range(1, n):
         term_order_bidx = sum(math.comb(n, i) for i in range(1, term_order))
         term_order_eidx = term_order_bidx + math.comb(n, term_order)
         cur_terms = terms[term_order_bidx:term_order_eidx]
+        assert len(cur_terms) == math.comb(n, term_order)
         for term_indices, cur_term in zip(itertools.combinations(range(n), term_order), cur_terms):
             term_indices: list[int]
             cur_term: ArithmeticSharedTensor
             # compute current term to be added to result
             tmp = cur_term._tensor.clone()
             delta_indices = [i for i in range(n) if i not in term_indices]
+            assert len(delta_indices) + term_order == n
             for delta_idx in delta_indices:
                 tmp = tmp * deltas[delta_idx]
             ret._tensor += tmp
+
     return ret
 
 

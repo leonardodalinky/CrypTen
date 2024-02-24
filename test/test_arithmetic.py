@@ -53,6 +53,7 @@ class TestArithmetic(MultiProcessTestCase):
         if not test_passed:
             logging.info(msg)
             logging.info("Result %s" % tensor)
+            logging.info("Reference %s" % reference)
             logging.info("Result - Reference = %s" % (tensor - reference))
         self.assertTrue(test_passed, msg=msg)
 
@@ -177,6 +178,25 @@ class TestArithmetic(MultiProcessTestCase):
         reference = 2 * tensor1
         encrypted_out = 2 * encrypted
         self._check(encrypted_out, reference, "right mul failed")
+
+    def test_multi_mul(self) -> None:
+        tensor1 = get_random_test_tensor(is_float=True, size=(2,))
+        tensor2 = get_random_test_tensor(is_float=True, size=(2,))
+        tensor3 = get_random_test_tensor(is_float=True, size=(2,))
+        encrypted = ArithmeticSharedTensor(tensor1)
+        encrypted2 = ArithmeticSharedTensor(tensor2)
+        encrypted3 = ArithmeticSharedTensor(tensor3)
+
+        reference = tensor1 * tensor2 * tensor3
+        encrypted_out_g = getattr(encrypted, "ll_multi_mul")(encrypted2, encrypted3)
+        next(encrypted_out_g).wait()
+        encrypted_out = next(encrypted_out_g)
+
+        self._check(
+            encrypted_out,
+            reference,
+            "private ll_multi_mul failed",
+        )
 
     def test_sum(self) -> None:
         """Tests sum reduction on encrypted tensor."""
@@ -345,9 +365,11 @@ class TestArithmetic(MultiProcessTestCase):
             self._check(
                 encrypted_out,
                 dot_reference,
-                "%s dot product failed" % "private"
-                if tensor_type == ArithmeticSharedTensor
-                else "public",
+                (
+                    "%s dot product failed" % "private"
+                    if tensor_type == ArithmeticSharedTensor
+                    else "public"
+                ),
             )
 
             # ger
@@ -356,9 +378,11 @@ class TestArithmetic(MultiProcessTestCase):
             self._check(
                 encrypted_out,
                 ger_reference,
-                "%s outer product failed" % "private"
-                if tensor_type == ArithmeticSharedTensor
-                else "public",
+                (
+                    "%s outer product failed" % "private"
+                    if tensor_type == ArithmeticSharedTensor
+                    else "public"
+                ),
             )
 
     def test_squeeze(self) -> None:

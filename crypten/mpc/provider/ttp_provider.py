@@ -8,6 +8,7 @@
 import functools
 import itertools
 import logging
+import math
 from abc import ABC
 from typing import Any
 
@@ -162,12 +163,12 @@ class TTPClient:
             else:
                 return self.generator
 
-        def ttp_request(self, func_name, device, *args, **kwargs) -> torch.LongTensor:
+        def ttp_request(self, function, device, *args, **kwargs) -> torch.LongTensor:
             assert comm.get().get_rank() == 0, "Only party 0 communicates with the TTPServer"
             if device is not None:
                 device = str(device)
             message = {
-                "function": func_name,
+                "function": function,
                 "device": device,
                 "args": args,
                 "kwargs": kwargs,
@@ -368,18 +369,16 @@ class TTPServer:
 
     def multi_mul(self, n: int, size: torch.Size, *args, **kwargs):
         """Generate shares for rank 0 of the high order terms."""
-        # TODO
         num_terms = 2**n - 1
         order_one_terms = [self._get_additive_PRSS(size) for _ in range(n)]
         high_order_terms = []
         for order in range(2, n + 1):
             order_indices = list(itertools.combinations(range(n), order))
             for indices in order_indices:
-                plain: torch.Tensor = functools.reduce(
-                    lambda x, y: torch.mul(x, y), [order_one_terms[i] for i in indices]
-                )
+                plain: torch.Tensor = math.prod(order_one_terms[i] for i in indices)
                 tmp = plain - self._get_additive_PRSS(size, remove_rank=True)
                 high_order_terms.append(tmp)
+        assert len(high_order_terms) + len(order_one_terms) == num_terms
         return torch.stack(high_order_terms, dim=0)
 
     def binary(self, size0, size1):
@@ -436,7 +435,11 @@ class TTPAction(ABC):
         # merge ttp request
         request_args = self.ttp_request_args()
         if request_args is not None:
-            ttp_result = TTPClient.get().ttp_request(**request_args)
+            function = request_args["function"]
+            device = request_args["device"]
+            args = request_args["args"]
+            kwargs = request_args["kwargs"]
+            ttp_result = TTPClient.get().ttp_request(function, device, *args, **kwargs)
         else:
             ttp_result = None
         # post stage
@@ -728,8 +731,9 @@ class MultiMulTTPAction(TTPAction):
                 high_order_results.append(
                     generate_random_ring_element(self.size, generator=generator, device=self.device)
                 )
-
-        return torch.stack(order_one_results, dim=0), torch.stack(high_order_results, dim=0)
+            return torch.stack(order_one_results, dim=0), torch.stack(high_order_results, dim=0)
+        else:
+            return torch.stack(order_one_results, dim=0), None
 
     def ttp_request_args(self) -> dict[str, Any] | None:
         """Args of TTP requrests"""

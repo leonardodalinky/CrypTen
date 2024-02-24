@@ -53,7 +53,7 @@ def exp(self):
         from crypten.mpc.provider.ttp_provider import TTPActionGroup
 
         new_iters = round(iters * math.log(2, 3))
-        new_iters = min(new_iters, 1)
+        new_iters = max(new_iters, 1)
         for _ in range(new_iters):
             g = result.ll_multi_mul(result, result)
             action_or_group = next(g)
@@ -106,7 +106,9 @@ def log(self, input_in_01=False):
     order = cfg.functions.log_order
 
     term1 = self.div(120)
-    term2 = exp(self.mul(2).add(1.0).neg()).mul(20)
+    # NOTE: for stability
+    with cfg.temp_override({"mpc.low_latency": False}):
+        term2 = exp(self.mul(2).add(1.0).neg()).mul(20)
     y = term1 - term2 + 3.0
 
     # 8th order Householder iterations
