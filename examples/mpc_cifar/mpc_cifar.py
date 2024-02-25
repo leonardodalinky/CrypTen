@@ -12,17 +12,18 @@ import shutil
 import tempfile
 import time
 
-import crypten
-import crypten.communicator as comm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
+from torchvision import datasets, transforms
+
+import crypten
+import crypten.communicator as comm
 from examples.meters import AverageMeter
 from examples.util import NoopContextManager
-from torchvision import datasets, transforms
 
 
 def run_mpc_cifar(
@@ -34,10 +35,12 @@ def run_mpc_cifar(
     weight_decay=1e-6,
     print_freq=10,
     model_location="",
+    data_dir=None,
     resume=False,
     evaluate=True,
     seed=None,
     skip_plaintext=False,
+    device="cpu",
     context_manager=None,
 ):
     if seed is not None:
@@ -47,7 +50,11 @@ def run_mpc_cifar(
     crypten.init()
 
     # create model
+    device = torch.device(device)
+    print("device.index:", device.index)
+    print("GPU count:", torch.cuda.device_count())
     model = LeNet()
+    model.to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(
@@ -59,15 +66,13 @@ def run_mpc_cifar(
     if resume:
         if os.path.isfile(model_location):
             logging.info("=> loading checkpoint '{}'".format(model_location))
-            checkpoint = torch.load(model_location)
+            checkpoint = torch.load(model_location, map_location=device)
             start_epoch = checkpoint["epoch"]
             best_prec1 = checkpoint["best_prec1"]
             model.load_state_dict(checkpoint["state_dict"])
             optimizer.load_state_dict(checkpoint["optimizer"])
             logging.info(
-                "=> loaded checkpoint '{}' (epoch {})".format(
-                    model_location, checkpoint["epoch"]
-                )
+                "=> loaded checkpoint '{}' (epoch {})".format(model_location, checkpoint["epoch"])
             )
         else:
             raise IOError("=> no checkpoint found at '{}'".format(model_location))
@@ -81,14 +86,15 @@ def run_mpc_cifar(
             ]
         )
         with context_manager:
+            print(data_dirname)
             trainset = datasets.CIFAR10(
-                data_dirname, train=True, download=True, transform=transform
+                data_dirname, train=True, download=False, transform=transform
             )
             testset = datasets.CIFAR10(
-                data_dirname, train=False, download=True, transform=transform
+                data_dirname, train=False, download=False, transform=transform
             )
         trainloader = torch.utils.data.DataLoader(
-            trainset, batch_size=4, shuffle=True, num_workers=2
+            trainset, batch_size=batch_size, shuffle=True, num_workers=2
         )
         testloader = torch.utils.data.DataLoader(
             testset, batch_size=batch_size, shuffle=False, num_workers=2
@@ -98,19 +104,25 @@ def run_mpc_cifar(
     if context_manager is None:
         context_manager = NoopContextManager()
 
-    data_dir = tempfile.TemporaryDirectory()
-    train_loader, val_loader = preprocess_data(context_manager, data_dir.name)
+    # TODO: existing data dir
+    if data_dir is None:
+        tmp_data_dir = tempfile.TemporaryDirectory()
+        data_dir = tmp_data_dir.name
+    else:
+        tmp_data_dir = None
+    train_loader, val_loader = preprocess_data(context_manager, data_dir)
 
     if evaluate:
         if not skip_plaintext:
             logging.info("===== Evaluating plaintext LeNet network =====")
-            validate(val_loader, model, criterion, print_freq)
+            validate(val_loader, model, criterion, device, print_freq)
         logging.info("===== Evaluating Private LeNet network =====")
         input_size = get_input_size(val_loader, batch_size)
-        private_model = construct_private_model(input_size, model)
-        validate(val_loader, private_model, criterion, print_freq)
+        private_model = construct_private_model(input_size, model, device)
+        validate(val_loader, private_model, criterion, device, print_freq)
         # logging.info("===== Validating side-by-side ======")
         # validate_side_by_side(val_loader, model, private_model)
+        crypten.print_communication_stats()
         return
 
     # define loss function (criterion) and optimizer
@@ -118,10 +130,10 @@ def run_mpc_cifar(
         adjust_learning_rate(optimizer, epoch, lr)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, print_freq)
+        train(train_loader, model, criterion, optimizer, epoch, device, print_freq)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion, print_freq)
+        prec1 = validate(val_loader, model, criterion, device, print_freq)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -136,10 +148,13 @@ def run_mpc_cifar(
             },
             is_best,
         )
-    data_dir.cleanup()
+    if tmp_data_dir is not None:
+        tmp_data_dir.cleanup()
+
+    crypten.print_communication_stats()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, print_freq=10):
+def train(train_loader, model, criterion, optimizer, epoch, device, print_freq=10):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -151,6 +166,8 @@ def train(train_loader, model, criterion, optimizer, epoch, print_freq=10):
     end = time.time()
 
     for i, (input, target) in enumerate(train_loader):
+        input = input.to(device)
+        target = target.to(device)
 
         # compute output
         output = model(input)
@@ -194,7 +211,7 @@ def train(train_loader, model, criterion, optimizer, epoch, print_freq=10):
             )
 
 
-def validate_side_by_side(val_loader, plaintext_model, private_model):
+def validate_side_by_side(val_loader, plaintext_model, private_model, device):
     """Validate the plaintext and private models side-by-side on each example"""
     # switch to evaluate mode
     plaintext_model.eval()
@@ -202,6 +219,8 @@ def validate_side_by_side(val_loader, plaintext_model, private_model):
 
     with torch.no_grad():
         for i, (input, target) in enumerate(val_loader):
+            input = input.to(device)
+            target = target.to(device)
             # compute output for plaintext
             output_plaintext = plaintext_model(input)
             # encrypt input and compute output for private
@@ -223,18 +242,20 @@ def get_input_size(val_loader, batch_size):
     return input.size()
 
 
-def construct_private_model(input_size, model):
+def construct_private_model(input_size, model, device):
     """Encrypt and validate trained model for multi-party setting."""
     # get rank of current process
     rank = comm.get().get_rank()
-    dummy_input = torch.empty(input_size)
+    dummy_input = torch.empty(input_size, device=device)
 
     # party 0 always gets the actual model; remaining parties get dummy model
     if rank == 0:
         model_upd = model
     else:
         model_upd = LeNet()
+    model_upd.to(device)
     private_model = crypten.nn.from_pytorch(model_upd, dummy_input).encrypt(src=0)
+    private_model.to(device)
     return private_model
 
 
@@ -255,12 +276,12 @@ def encrypt_data_tensor_with_src(input):
     if rank == src_id:
         input_upd = input
     else:
-        input_upd = torch.empty(input.size())
+        input_upd = torch.empty(input.size(), device=input.device)
     private_input = crypten.cryptensor(input_upd, src=src_id)
     return private_input
 
 
-def validate(val_loader, model, criterion, print_freq=10):
+def validate(val_loader, model, criterion, device, print_freq=10):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -272,9 +293,9 @@ def validate(val_loader, model, criterion, print_freq=10):
     with torch.no_grad():
         end = time.time()
         for i, (input, target) in enumerate(val_loader):
-            if isinstance(model, crypten.nn.Module) and not crypten.is_encrypted_tensor(
-                input
-            ):
+            input = input.to(device)
+            target = target.to(device)
+            if isinstance(model, crypten.nn.Module) and not crypten.is_encrypted_tensor(input):
                 input = encrypt_data_tensor_with_src(input)
             # compute output
             output = model(input)
@@ -313,9 +334,7 @@ def validate(val_loader, model, criterion, print_freq=10):
                     )
                 )
 
-        logging.info(
-            " * Prec@1 {:.3f} Prec@5 {:.3f}".format(top1.value(), top5.value())
-        )
+        logging.info(" * Prec@1 {:.3f} Prec@5 {:.3f}".format(top1.value(), top5.value()))
     return top1.value()
 
 

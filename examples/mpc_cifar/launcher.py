@@ -37,7 +37,6 @@ import os
 
 from examples.multiprocess_launcher import MultiProcessLauncher
 
-
 parser = argparse.ArgumentParser(description="CrypTen Cifar Training")
 parser.add_argument(
     "--world_size",
@@ -58,7 +57,7 @@ parser.add_argument(
 parser.add_argument(
     "-b",
     "--batch-size",
-    default=256,
+    default=1,
     type=int,
     metavar="N",
     help="mini-batch size (default: 256)",
@@ -96,6 +95,13 @@ parser.add_argument(
     help="path to latest checkpoint (default: none)",
 )
 parser.add_argument(
+    "--data-dir",
+    type=str,
+    metavar="DATA-PATH",
+    required=False,
+    help="path to the data directory. If not downloaded yet, the data will be downloaded from the internet",
+)
+parser.add_argument(
     "--resume",
     default=False,
     action="store_true",
@@ -108,9 +114,7 @@ parser.add_argument(
     action="store_true",
     help="evaluate model on validation set",
 )
-parser.add_argument(
-    "--seed", default=None, type=int, help="seed for initializing training. "
-)
+parser.add_argument("--seed", default=None, type=int, help="seed for initializing training. ")
 parser.add_argument("--lr-decay", default=0.1, type=float, help="lr decay factor")
 parser.add_argument(
     "--skip-plaintext",
@@ -123,6 +127,12 @@ parser.add_argument(
     default=False,
     action="store_true",
     help="Run example in multiprocess mode",
+)
+parser.add_argument(
+    "--device",
+    type=str,
+    default="cpu",
+    help="Device to use for training / evaluation",
 )
 
 
@@ -144,10 +154,12 @@ def _run_experiment(args):
         args.weight_decay,
         args.print_freq,
         args.model_location,
+        args.data_dir,
         args.resume,
         args.evaluate,
         args.seed,
         args.skip_plaintext,
+        args.device,
     )
 
 

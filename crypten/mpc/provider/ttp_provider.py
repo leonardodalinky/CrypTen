@@ -9,6 +9,8 @@ import functools
 import itertools
 import logging
 import math
+import sys
+import traceback
 from abc import ABC
 from typing import Any
 
@@ -178,8 +180,9 @@ class TTPClient:
             comm.get().send_obj(message, ttp_rank, self.ttp_group)
 
             size = comm.get().recv_obj(ttp_rank, self.ttp_group)
-            result = torch.empty(size, dtype=torch.long, device=device)
+            result = torch.empty(size, dtype=torch.long, device="cpu")
             comm.get().broadcast(result, ttp_rank, self.comm_group)
+            result = result.to(device=device)
 
             return result
 
@@ -241,6 +244,7 @@ class TTPServer:
         """Initializes a Trusted Third Party server that receives requests"""
         # Initialize connection
         crypten.init()
+        logging.getLogger().setLevel(logging.INFO)
         self.ttp_group = comm.get().ttp_group
         self.comm_group = comm.get().ttp_comm_group
         self.device = "cpu"
@@ -284,12 +288,14 @@ class TTPServer:
                     self.device = device
 
                     result = getattr(self, function)(*args, **kwargs)
+                    result = result.to(device="cpu")
 
                     comm.get().send_obj(result.size(), 0, self.ttp_group)
                     comm.get().broadcast(result, ttp_rank, self.comm_group)
-        except RuntimeError as err:
-            logging.info("Encountered Runtime error. TTPServer shutting down:")
-            logging.info(f"{err}")
+        except RuntimeError:
+            logging.error("Encountered error. TTPServer shutting down:")
+            logging.error(traceback.format_exc())
+            sys.exit(1)
 
     def _setup_generators(self):
         """Create random generator to send to a party"""
@@ -315,7 +321,7 @@ class TTPServer:
         if device is None:
             device = "cpu"
         device = torch.device(device)
-        if device.type == "cuda":
+        if "cuda" in str(device):
             return self.generators_cuda
         else:
             return self.generators
@@ -565,8 +571,8 @@ class GenAddTripleTTPAction(TTPAction):
 
     def get_result_size(self) -> torch.Size:
         if self._result_size is None:
-            dummy_a = torch.empty(self.size0, dtype=torch.long, device=self.device)
-            dummy_b = torch.empty(self.size1, dtype=torch.long, device=self.device)
+            dummy_a = torch.empty(self.size0, dtype=torch.float32, device=self.device)
+            dummy_b = torch.empty(self.size1, dtype=torch.float32, device=self.device)
             self._result_size = getattr(torch, self.op)(
                 dummy_a, dummy_b, *self.args, **self.kwargs
             ).size()

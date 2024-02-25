@@ -4,8 +4,9 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
-import crypten
 import torch
+
+import crypten
 from crypten.cuda import CUDALongTensor
 
 
@@ -16,6 +17,7 @@ def generate_random_ring_element(size, ring_size=(2**64), generator=None, **kwar
         device = torch.device("cpu") if device is None else device
         device = torch.device(device) if isinstance(device, str) else device
         generator = crypten.generators["local"][device]
+    kwargs.setdefault("device", generator.device)
     # TODO (brianknott): Check whether this RNG contains the full range we want.
     rand_element = torch.randint(
         -(ring_size // 2),
